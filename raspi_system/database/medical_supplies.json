@@ -1,0 +1,14 @@
+{
+  "medical_supplies": [
+    { "item": "band aid", "rack": 1, "location": 5 },
+    { "item": "gauze pads", "rack": 2, "location": 12 },
+    { "item": "antiseptic wipes", "rack": 3, "location": 8 },
+    { "item": "latex gloves", "rack": 1, "location": 2 },
+    { "item": "thermometer", "rack": 4, "location": 19 },
+    { "item": "alcohol swabs", "rack": 2, "location": 7 },
+    { "item": "medical tape", "rack": 3, "location": 14 },
+    { "item": "syringes", "rack": 4, "location": 3 },
+    { "item": "face masks", "rack": 1, "location": 10 },
+    { "item": "scissors", "rack": 2, "location": 16 }
+  ]
+}

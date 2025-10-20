@@ -1,0 +1,1 @@
+// Simulates BLE communication for testing LED logic
