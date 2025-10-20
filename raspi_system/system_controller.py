@@ -9,12 +9,12 @@
 # DatabaseManager → sends location to BLECommunicationManager
 
 # system_controler.py
-
+# import socket
 import threading
 from datetime import time
 
 import pyttsx3
-from database_manager import load_database_from_json
+from database_manager import load_database_from_sqlite
 from motion_handler import motion_listener
 from nlp_parser import find_keyword
 from speech_to_text import listen_and_transcribe
@@ -27,7 +27,8 @@ shutdown_flag = threading.Event()
 wake_stream_active = threading.Event()
 wake_stream_active.set()
 
-# import socket
+# init_db()
+# db = load_database_from_sqlite("medical_supplies.db")
 
 
 # def send_location_to_frontend(location_id):
@@ -43,7 +44,12 @@ wake_stream_active.set()
 
 def voice_thread():
     print("Voice thread started. Waiting for trigger...")
-    db = load_database_from_json("database\\medical_supplies.json")
+    # db = load_database_from_sqlite("medical_supplies.db")
+    try:
+        db = load_database_from_sqlite()
+        print("Database loaded in voice thread.")
+    except Exception as e:
+        print(f"Error loading database: {e}")
 
     while not shutdown_flag.is_set():
         if voice_trigger.wait(timeout=1):
@@ -56,7 +62,7 @@ def voice_thread():
                     if shutdown_flag.is_set():
                         break
                     # print(f"Heard: {phrase}")
-                    result = find_keyword(phrase, db)
+                    result = find_keyword(phrase, load_database_from_sqlite())
                     print("Keyword match result:", result)
 
                     if "Rack" in result:
@@ -104,7 +110,12 @@ def run_system():
 
 def run_transcriber():
     print("Starting voice query...")
-    db = load_database_from_json("database\\medical_supplies.json")
+    # db = load_database_from_sqlite("medical_supplies.db")
+    try:
+        db = load_database_from_sqlite()
+        print("Database loaded in transcriber.")
+    except Exception as e:
+        print(f"Error loading database: {e}")
     print("Loaded database:", db)
     while True:
         text = listen_and_transcribe()

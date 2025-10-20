@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Medical Supplies</title>
+</head>
+<body>
+  <h1>Add Medical Supply</h1>
+  <form method="POST">
+    <label>Item: <input type="text" name="item" required></label><br>
+    <label>Rack #: <input type="number" name="rack" required></label><br>
+    <label>Location #: <input type="number" name="location" required></label><br>
+    <button type="submit">Add</button>
+  </form>
+
+  <h2>Current Supplies</h2>
+  <ul>
+    {% for entry in items %}
+      <li>{{ entry.item }} — Rack {{ entry.rack }}, Location {{ entry.location }}</li>
+    {% endfor %}
+  </ul>
+</body>
+</html>
