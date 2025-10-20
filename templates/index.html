@@ -18,5 +18,12 @@
       <li>{{ entry.item }} — Rack {{ entry.rack }}, Location {{ entry.location }}</li>
     {% endfor %}
   </ul>
+
+  <h2>Delete Item by Name</h2>
+  <form method="POST" action="/delete_by_name">
+    <label>Item Name: <input type="text" name="item_name" required></label>
+    <button type="submit">Delete</button>
+  </form>
+
 </body>
 </html>

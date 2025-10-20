@@ -1,5 +1,10 @@
 from flask import Flask, request, render_template, redirect
-from raspi_system.database_manager import init_db, load_database_from_sqlite, add_item
+from raspi_system.database_manager import (
+    init_db,
+    load_database_from_sqlite,
+    add_item,
+    delete_item_by_name,
+)
 
 app = Flask(__name__)
 init_db()
@@ -16,6 +21,13 @@ def index():
 
     items = load_database_from_sqlite()
     return render_template("index.html", items=items)
+
+
+@app.route("/delete_by_name", methods=["POST"])
+def delete_by_name():
+    item_name = request.form["item_name"]
+    delete_item_by_name(item_name)
+    return redirect("/")
 
 
 if __name__ == "__main__":
