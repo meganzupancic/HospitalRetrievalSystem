@@ -6,5 +6,9 @@ def find_keyword(text, database):
     for entry in database:
         item = entry["item"].lower()
         if item in text:
-            return f"Found '{entry['item']}' at Rack {entry['rack']}, Location {entry['location']}"
-    return "No keyword found."
+            return {
+                "item": entry["item"],
+                "rack": entry["rack"],
+                "location": entry["location"],
+            }
+    return None

@@ -1,12 +1,17 @@
-from flask import Flask, request, render_template, redirect
+# app.py
+
+from flask import Flask, redirect, render_template, request
+from flask_socketio import SocketIO
+
 from raspi_system.database_manager import (
-    init_db,
-    load_database_from_sqlite,
     add_item,
     delete_item_by_name,
+    init_db,
+    load_database_from_sqlite,
 )
 
 app = Flask(__name__)
+socketio = SocketIO(app)
 init_db()
 
 
@@ -30,5 +35,11 @@ def delete_by_name():
     return redirect("/")
 
 
+@app.route("/test_emit")
+def test_emit():
+    socketio.emit("highlight_keyword", {"keyword": "band aid"})
+    return "Test event emitted"
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    socketio.run(app, host="0.0.0.0", port=5000)

@@ -3,10 +3,18 @@
 # test_suite.py
 
 # from system_controller import run_transcriber
+
 import signal
 import time
 
-from system_controller import run_system, shutdown_flag
+print("✅ Starting imports...")
+
+try:
+    from system_controller import run_system, shutdown_flag
+
+    print("✅ system_controller imported successfully")
+except Exception as e:
+    print(f"❌ Error importing system_controller: {e}")
 
 
 def signal_handler(sig, frame):

@@ -10,15 +10,23 @@
 
 # system_controler.py
 # import socket
+import os
+import sys
+
+# Add the parent directory to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import threading
 from datetime import time
 
 import pyttsx3
-from database_manager import load_database_from_sqlite
-from motion_handler import motion_listener
-from nlp_parser import find_keyword
-from speech_to_text import listen_and_transcribe
-from wake_word import wake_word_listener
+from raspi_system.database_manager import load_database_from_sqlite
+from raspi_system.motion_handler import motion_listener
+from raspi_system.nlp_parser import find_keyword
+from raspi_system.speech_to_text import listen_and_transcribe
+from raspi_system.wake_word import wake_word_listener
+
+from app import socketio
 
 engine = pyttsx3.init()
 voice_trigger = threading.Event()
@@ -65,13 +73,16 @@ def voice_thread():
                     result = find_keyword(phrase, load_database_from_sqlite())
                     print("Keyword match result:", result)
 
-                    if "Rack" in result:
-                        continue
-                    if "thank you" in phrase.lower():
-                        response = "You're welcome!"
-                        print(response)
-                        # speak(response)
-                        continue
+                    if result:
+                        keyword = result.get("item")
+                        print("Keyword match result: ", keyword)
+                        socketio.emit("highlight_keyword", {"keyword": keyword})
+
+                        # Optional: respond to known phrases
+                        if "thank you" in phrase.lower():
+                            response = "You're welcome!"
+                            print(response)
+
             except GeneratorExit:
                 break
             except Exception as e:

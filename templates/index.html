@@ -1,29 +1,100 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <title>Medical Supplies</title>
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <script>
+    const socket = io(); // This connects to the same host/port as the Flask app
+
+    socket.on("connect", () => {
+      console.log("✅ Connected to Socket.IO server");
+    });
+
+    socket.on("highlight_keyword", data => {
+      const keyword = data.keyword.trim().toLowerCase();
+      const items = document.querySelectorAll("#supply-list li");
+
+      items.forEach(item => {
+        const itemKeyword = item.dataset.keyword.trim().toLowerCase();
+        if (itemKeyword === keyword) {
+          item.classList.add("highlight");
+          setTimeout(() => item.classList.remove("highlight"), 5000);
+        }
+      });
+    });
+  </script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 40px;
+    }
+
+    h1, h2 {
+      color: #333;
+    }
+
+    form {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin: 10px 0;
+    }
+
+    input[type="text"],
+    input[type="number"] {
+      padding: 5px;
+      width: 200px;
+    }
+
+    button {
+      padding: 8px 12px;
+      margin-top: 10px;
+    }
+
+    ul {
+      list-style-type: none;
+      padding-left: 0;
+    }
+
+    li {
+      padding: 6px;
+      margin-bottom: 4px;
+      border-bottom: 1px solid #ccc;
+    }
+
+    .highlight {
+      background-color: yellow;
+      transition: background-color 0.5s ease;
+    }
+  </style>
 </head>
 <body>
   <h1>Add Medical Supply</h1>
   <form method="POST">
-    <label>Item: <input type="text" name="item" required></label><br>
-    <label>Rack #: <input type="number" name="rack" required></label><br>
-    <label>Location #: <input type="number" name="location" required></label><br>
+    <label>Item: <input type="text" name="item" required></label>
+    <label>Rack #: <input type="number" name="rack" required></label>
+    <label>Location #: <input type="number" name="location" required></label>
     <button type="submit">Add</button>
   </form>
 
   <h2>Current Supplies</h2>
-  <ul>
+  <ul id="supply-list">
     {% for entry in items %}
-      <li>{{ entry.item }} — Rack {{ entry.rack }}, Location {{ entry.location }}</li>
+      <li data-keyword="{{ entry.item }}">{{ entry.item }} — Rack {{ entry.rack }}, Location {{ entry.location }}</li>
     {% endfor %}
   </ul>
+
 
   <h2>Delete Item by Name</h2>
   <form method="POST" action="/delete_by_name">
     <label>Item Name: <input type="text" name="item_name" required></label>
     <button type="submit">Delete</button>
   </form>
+
+  
 
 </body>
 </html>
