@@ -8,7 +8,9 @@ import sounddevice as sd
 ACCESS_KEY = "u6opFld4V3f6QBSDvUfOP/KFgrojdVzI8H4JghtWNONoxVgqG/kAxQ=="
 
 
-def wake_word_listener(trigger_event, shutdown_flag, pause_event, wake_stream_active):
+def wake_word_listener(
+    trigger_event, shutdown_flag, pause_event, wake_stream_active, ui
+):
     print("Porcupine wake word thread started.")
 
     porcupine = pvporcupine.create(
@@ -35,7 +37,7 @@ def wake_word_listener(trigger_event, shutdown_flag, pause_event, wake_stream_ac
                         pcm = np.frombuffer(pcm, dtype=np.int16)
                         keyword_index = porcupine.process(pcm)
                         if keyword_index >= 0:
-                            print("Wake word detected!")
+                            ui.log("Wake word detected!", tag="green")
                             trigger_event.set()
                             pause_event.set()
                             wake_stream_active.clear()  # Fully stop Porcupine

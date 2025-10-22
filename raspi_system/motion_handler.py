@@ -4,7 +4,7 @@
 import time
 
 
-def motion_listener(trigger_event, shutdown_flag, pause_event):
+def motion_listener(trigger_event, shutdown_flag, pause_event, ui):
     print("Motion thread started.")
     sleep_time = 30
     elapsed = 0
@@ -14,7 +14,7 @@ def motion_listener(trigger_event, shutdown_flag, pause_event):
             time.sleep(sleep_time)
             elapsed += 1
             if elapsed >= sleep_time:
-                print("Motion detected!")
+                ui.log("Motion detected!", tag="green")
                 trigger_event.set()
                 elapsed = 0
         else:

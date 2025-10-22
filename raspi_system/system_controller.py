@@ -17,16 +17,19 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import threading
+import tkinter as tk
 from datetime import time
+from tkinter import scrolledtext
 
 import pyttsx3
+
+# from app import socketio
 from raspi_system.database_manager import load_database_from_sqlite
 from raspi_system.motion_handler import motion_listener
 from raspi_system.nlp_parser import find_keyword
 from raspi_system.speech_to_text import listen_and_transcribe
 from raspi_system.wake_word import wake_word_listener
-
-from app import socketio
+from socketio_instance import socketio
 
 engine = pyttsx3.init()
 voice_trigger = threading.Event()
@@ -50,14 +53,45 @@ wake_stream_active.set()
 #         print(f"Error sending to frontend: {e}")
 
 
-def voice_thread():
+class SystemUI:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("System Controller Monitor")
+
+        self.output_text = scrolledtext.ScrolledText(
+            self.root, width=80, height=25, font=("Courier", 12)
+        )
+        self.output_text.pack(padx=10, pady=10)
+
+        self.output_text.tag_config("green", foreground="green")
+
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        # Initial welcome message
+        self.log(
+            "Welcome to the Hospital Retrieval System (prototype). Please say the wake word to begin..."
+        )
+
+    def log(self, message, tag=None):
+        self.output_text.insert(tk.END, message + "\n", tag)
+        self.output_text.see(tk.END)
+        self.root.update()
+
+    def run(self):
+        self.root.mainloop()
+
+    def on_close(self):
+        shutdown_flag.set()
+        self.root.destroy()
+
+
+def voice_thread(ui):
     print("Voice thread started. Waiting for trigger...")
-    # db = load_database_from_sqlite("medical_supplies.db")
-    try:
-        db = load_database_from_sqlite()
-        print("Database loaded in voice thread.")
-    except Exception as e:
-        print(f"Error loading database: {e}")
+    # try:
+    #     db = load_database_from_sqlite()
+    #     print("Database loaded in voice thread.")
+    # except Exception as e:
+    #     print(f"Error loading database: {e}")
 
     while not shutdown_flag.is_set():
         if voice_trigger.wait(timeout=1):
@@ -65,53 +99,55 @@ def voice_thread():
             pause_event.set()
 
             try:
-                # Start a new transcription session
                 for phrase in listen_and_transcribe(shutdown_flag):
                     if shutdown_flag.is_set():
                         break
-                    # print(f"Heard: {phrase}")
-                    result = find_keyword(phrase, load_database_from_sqlite())
-                    print("Keyword match result:", result)
+
+                    db = load_database_from_sqlite()
+                    ui.log(f"Heard: {phrase}")
+                    result = find_keyword(phrase, db)
+                    print(f"Keyword match result: {result}")
 
                     if result:
                         keyword = result.get("item")
-                        print("Keyword match result: ", keyword)
+                        ui.log(
+                            f"Item found: \"{keyword}\"  Location: rack #{result.get('rack')} and location {result.get('location')}\n"
+                        )
                         socketio.emit("highlight_keyword", {"keyword": keyword})
 
-                        # Optional: respond to known phrases
                         if "thank you" in phrase.lower():
                             response = "You're welcome!"
-                            print(response)
+                            ui.log(response)
 
             except GeneratorExit:
                 break
             except Exception as e:
                 print(f"Error in voice thread: {e}")
 
-            # print("Keyword match result:", result)
-            # print(result)
-
             pause_event.clear()
-            wake_stream_active.set()  # Reactivate Porcupine stream
-            time.sleep(0.5)  # Brief pause before next listening session
+            wake_stream_active.set()
+            time.sleep(0.5)
 
 
 def run_system():
-    t1 = threading.Thread(target=voice_thread, daemon=True)
+    ui = SystemUI()
+    t1 = threading.Thread(target=voice_thread, args=(ui,), daemon=True)
     t2 = threading.Thread(
         target=motion_listener,
-        args=(voice_trigger, shutdown_flag, pause_event),
+        args=(voice_trigger, shutdown_flag, pause_event, ui),
         daemon=True,
     )
     t3 = threading.Thread(
         target=wake_word_listener,
-        args=(voice_trigger, shutdown_flag, pause_event, wake_stream_active),
+        args=(voice_trigger, shutdown_flag, pause_event, wake_stream_active, ui),
         daemon=True,
     )
 
     t1.start()
     t2.start()
     t3.start()
+
+    ui.run()
 
 
 # def speak(text):

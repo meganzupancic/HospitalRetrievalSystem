@@ -5,25 +5,53 @@
   <title>Medical Supplies</title>
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
   <script>
-    const socket = io(); // This connects to the same host/port as the Flask app
+    const socket = io();
 
     socket.on("connect", () => {
       console.log("✅ Connected to Socket.IO server");
     });
 
-    socket.on("highlight_keyword", data => {
-      const keyword = data.keyword.trim().toLowerCase();
-      const items = document.querySelectorAll("#supply-list li");
+    socket.on("highlight_keyword", (data) => {
+      const keyword = data.keyword.toLowerCase();
+      console.log("🔍 Highlighting keyword:", keyword);
 
-      items.forEach(item => {
-        const itemKeyword = item.dataset.keyword.trim().toLowerCase();
-        if (itemKeyword === keyword) {
-          item.classList.add("highlight");
-          setTimeout(() => item.classList.remove("highlight"), 5000);
+      const items = document.querySelectorAll(".item-name");
+      items.forEach((el) => {
+        if (el.textContent.toLowerCase().includes(keyword)) {
+          el.classList.add("highlight");
+        } else {
+          el.classList.remove("highlight");
         }
       });
     });
   </script>
+  <script>
+    socket.on("supply_updated", () => {
+      console.log("🔄 Supply list updated");
+      fetch("/api/items")
+        .then(res => res.json())
+        .then(data => {
+          const supplyList = document.getElementById("supply-list");
+          supplyList.innerHTML = ""; // Clear current list
+
+          data.forEach(entry => {
+            const li = document.createElement("li");
+            li.className = "item-name";
+            li.dataset.keyword = entry.item;
+            li.innerHTML = `
+              ${entry.item} — Rack ${entry.rack}, Location ${entry.location}
+              <form method="POST" action="/delete_by_name" style="display:inline;">
+                <input type="hidden" name="item_name" value="${entry.item}">
+                <button type="submit" class="delete-button" title="Delete">🗑️</button>
+              </form>
+            `;
+            supplyList.appendChild(li);
+          });
+        });
+    });
+  </script>
+
+
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -32,10 +60,6 @@
 
     h1, h2 {
       color: #333;
-    }
-
-    form {
-      margin-bottom: 20px;
     }
 
     label {
@@ -69,21 +93,65 @@
       background-color: yellow;
       transition: background-color 0.5s ease;
     }
+
+    .rack {
+      display: grid;
+      grid-template-columns: repeat(5, 100px);
+      grid-template-rows: repeat(4, 100px);
+      gap: 5px;
+      margin: 20px 0;
+      border: 2px solid #333;
+      padding: 10px;
+    }
+
+    .location {
+      border: 1px solid #aaa;
+      background-color: #f9f9f9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+
+    .item {
+      background-color: #cce5ff;
+      padding: 5px;
+      cursor: grab;
+    }
+
+    .delete-button {
+      margin-left: 10px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+    }
   </style>
 </head>
 <body>
-  <h1>Add Medical Supply</h1>
-  <form method="POST">
-    <label>Item: <input type="text" name="item" required></label>
-    <label>Rack #: <input type="number" name="rack" required></label>
-    <label>Location #: <input type="number" name="location" required></label>
-    <button type="submit">Add</button>
-  </form>
+  <h1>Create New Item</h1>
+  <label>Item Name: <input type="text" id="new-item-name" required></label>
+  <button onclick="createNewItem()">Create Item</button>
+
+  <h2>Rack Layout</h2>
+  <div id="rack-container">
+    <div class="rack" id="rack-1"></div>
+    <div class="rack" id="rack-2"></div>
+  </div>
 
   <h2>Current Supplies</h2>
   <ul id="supply-list">
     {% for entry in items %}
-      <li data-keyword="{{ entry.item }}">{{ entry.item }} — Rack {{ entry.rack }}, Location {{ entry.location }}</li>
+      <li class="item-name"
+          data-keyword="{{ entry.item }}"
+          data-rack="{{ entry.rack }}"
+          data-location="{{ entry.location }}">
+        {{ entry.item }} — Rack {{ entry.rack }}, Location {{ entry.location }}
+        <form method="POST" action="/delete_by_name" style="display:inline;">
+          <input type="hidden" name="item_name" value="{{ entry.item }}">
+          <button type="submit" class="delete-button" title="Delete">🗑️</button>
+        </form>
+      </li>
     {% endfor %}
   </ul>
 
@@ -94,7 +162,100 @@
     <button type="submit">Delete</button>
   </form>
 
-  
 
+  <script>
+    // Create rack layout
+    for (let rackNum = 1; rackNum <= 2; rackNum++) {
+      const rack = document.getElementById(`rack-${rackNum}`);
+      for (let i = 0; i < 20; i++) {
+        const location = document.createElement("div");
+        location.className = "location";
+        location.dataset.rack = rackNum;
+        location.dataset.index = i;
+        location.ondragover = (e) => e.preventDefault();
+        location.ondrop = handleDrop;
+        rack.appendChild(location);
+      }
+    }
+
+    function createNewItem() {
+      const name = document.getElementById("new-item-name").value.trim();
+      if (!name) return;
+
+      const item = document.createElement("div");
+      item.className = "item";
+      item.textContent = name;
+      item.draggable = true;
+      item.ondragstart = (e) => {
+        e.dataTransfer.setData("text/plain", name);
+      };
+
+      document.body.appendChild(item);
+    }
+
+    function handleDrop(e) {
+      const itemName = e.dataTransfer.getData("text/plain");
+      const rack = e.currentTarget.dataset.rack;
+      const index = parseInt(e.currentTarget.dataset.index);
+      const shelf = Math.floor(index / 5) + 1;
+      const location = (shelf - 1) * 5 + (index % 5) + 1;
+
+      const allItems = document.querySelectorAll(".item");
+      let draggedItem = null;
+      allItems.forEach((el) => {
+        if (el.textContent === itemName) {
+          draggedItem = el;
+        }
+      });
+
+      if (draggedItem) {
+        e.currentTarget.appendChild(draggedItem);
+      }
+
+      // Check if item already exists in the supply list
+      const existingItems = document.querySelectorAll("#supply-list .item-name");
+      let exists = false;
+      existingItems.forEach((el) => {
+        if (el.dataset.keyword === itemName) {
+          exists = true;
+        }
+      });
+
+      const endpoint = exists ? "/update_location" : "/add_item";
+
+      fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: `item=${encodeURIComponent(itemName)}&rack=${rack}&location=${location}`
+      }).then(() => console.log(`📦 ${exists ? "Updated" : "Added"} ${itemName} → Rack ${rack}, Location ${location}`));
+    }
+  </script>
+  <script>
+    window.addEventListener("DOMContentLoaded", () => {
+      const items = document.querySelectorAll(".item-name");
+
+      items.forEach((el) => {
+        const name = el.dataset.keyword;
+        const rack = el.dataset.rack;
+        const location = parseInt(el.dataset.location);
+
+        // Calculate grid index from location
+        const index = location - 1;
+        const rackContainer = document.querySelector(`#rack-${rack}`);
+        const targetCell = rackContainer.querySelector(`.location[data-index="${index}"]`);
+
+        if (targetCell) {
+          const itemDiv = document.createElement("div");
+          itemDiv.className = "item";
+          itemDiv.textContent = name;
+          itemDiv.draggable = true;
+          itemDiv.ondragstart = (e) => {
+            e.dataTransfer.setData("text/plain", name);
+          };
+          targetCell.appendChild(itemDiv);
+        }
+      });
+    });
+  </script>
 </body>
 </html>
