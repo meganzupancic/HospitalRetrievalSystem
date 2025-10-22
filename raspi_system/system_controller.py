@@ -69,7 +69,8 @@ class SystemUI:
 
         # Initial welcome message
         self.log(
-            "Welcome to the Hospital Retrieval System (prototype). Please say the wake word to begin..."
+            "Welcome to the Hospital Retrieval System (prototype). \n"
+            "Please say the wake word to begin..."
         )
 
     def log(self, message, tag=None):

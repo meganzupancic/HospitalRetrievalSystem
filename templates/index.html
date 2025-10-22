@@ -126,12 +126,24 @@
       cursor: pointer;
       font-size: 16px;
     }
+    .location-label {
+      position: absolute;
+      bottom: 4px;
+      right: 6px;
+      font-size: 12px;
+      color: #666;
+      pointer-events: none;
+    }
+
   </style>
 </head>
 <body>
   <h1>Create New Item</h1>
   <label>Item Name: <input type="text" id="new-item-name" required></label>
   <button onclick="createNewItem()">Create Item</button>
+  <div id="new-items-container" style="margin-top: 20px;">
+    <h2>New Items (Drag to Shelf)</h2>
+  </div>
 
   <h2>Rack Layout</h2>
   <div id="rack-container">
@@ -156,13 +168,6 @@
   </ul>
 
 
-  <h2>Delete Item by Name</h2>
-  <form method="POST" action="/delete_by_name">
-    <label>Item Name: <input type="text" name="item_name" required></label>
-    <button type="submit">Delete</button>
-  </form>
-
-
   <script>
     // Create rack layout
     for (let rackNum = 1; rackNum <= 2; rackNum++) {
@@ -174,9 +179,17 @@
         location.dataset.index = i;
         location.ondragover = (e) => e.preventDefault();
         location.ondrop = handleDrop;
+
+        // Add location number label
+        const label = document.createElement("div");
+        label.className = "location-label";
+        label.textContent = i + 1;
+        location.appendChild(label);
+
         rack.appendChild(location);
       }
     }
+
 
     function createNewItem() {
       const name = document.getElementById("new-item-name").value.trim();
@@ -190,7 +203,9 @@
         e.dataTransfer.setData("text/plain", name);
       };
 
-      document.body.appendChild(item);
+      const container = document.getElementById("new-items-container");
+      container.appendChild(item);
+
     }
 
     function handleDrop(e) {
