@@ -63,7 +63,12 @@ class SystemUI:
         )
         self.output_text.pack(padx=10, pady=10)
 
+        # Configure text colors for different message types
         self.output_text.tag_config("green", foreground="green")
+        self.output_text.tag_config("blue", foreground="#0066cc")
+        self.output_text.tag_config("purple", foreground="#6600cc")
+        self.output_text.tag_config("orange", foreground="#ff6600")
+        self.output_text.tag_config("bold", font=("Courier", 12, "bold"))
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -121,16 +126,22 @@ def voice_thread(ui):
                             matches = []
 
                         if matches:
-                            # Format each match as 'rack #X location Y' and join them
-                            locs = ", ".join(
-                                [f"rack #{m.get('rack')} location {m.get('location')}" for m in matches]
-                            )
-                            ui.log(f"Item found: \"{keyword}\"  Instances: {locs}\n")
+                            # Create header for multiple instances with highlighting
+                            ui.log(f"Item found: ", tag="bold")
+                            ui.log(f"\"{keyword}\"", tag="blue")
+                            ui.log("\nLocations:", tag="orange")
+                            # Log each instance on a new line with highlighting
+                            for m in matches:
+                                location_text = f"  • Rack #{m.get('rack')} Location {m.get('location')}"
+                                ui.log(location_text, tag="purple")
+                            ui.log("") # Empty line for spacing
                         else:
                             # Fallback to the single result returned by the NLP parser
-                            ui.log(
-                                f"Item found: \"{keyword}\"  Location: rack #{result.get('rack')} and location {result.get('location')}\n"
-                            )
+                            ui.log(f"Item found: ", tag="bold")
+                            ui.log(f"\"{keyword}\"", tag="blue")
+                            location_text = f"\n  • Rack #{result.get('rack')} Location {result.get('location')}"
+                            ui.log(location_text, tag="purple")
+                            ui.log("")  # Empty line for spacing
                         socketio.emit("highlight_keyword", {"keyword": keyword})
 
                         if "thank you" in phrase.lower():

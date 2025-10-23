@@ -84,9 +84,12 @@
 
     // Function to refresh palette and grid from server items only
     function refreshAll() {
-      // Build palette from distinct DB items (includes placeholders)
-      fetch('/api/distinct_items')
-        .then(r => r.json())
+      // Return promise chain for proper error handling
+      return fetch('/api/distinct_items')
+        .then(r => {
+          if (!r.ok) throw new Error(`Failed to fetch distinct items: ${r.status}`);
+          return r.json();
+        })
         .then(distinct => {
           const container = document.getElementById('new-items-container');
           const heading = container.querySelector('h2');
@@ -98,6 +101,7 @@
             item.className = 'item palette-item';
             item.textContent = name;
             item.draggable = true;
+            item.style.backgroundColor = getItemColor(name);
 
             // delete button for removing item entirely
             const del = document.createElement('button');
@@ -133,11 +137,17 @@
             container.appendChild(item);
           });
 
-          // Now fetch full items for grid placements
-          return fetch('/api/items').then(r => r.json());
+          // Now fetch full items for grid placements atomically
+          return fetch('/api/items')
+            .then(r => {
+              if (!r.ok) throw new Error(`Failed to fetch items: ${r.status}`);
+              return r.json();
+            });
         })
         .then(data => {
           if (!data) return;
+          // Make grid updates atomic by gathering changes first
+          const updates = [];
           // Clear previous placements and redraw grid placements from data
           document.querySelectorAll('.location').forEach(c => {
             delete c.dataset.placedName;
@@ -147,14 +157,23 @@
             c.classList.remove('connect-left','connect-right');
           });
 
+          // Gather all updates first
           data.forEach(entry => {
             if (entry.rack && entry.location) {
               const rack = document.querySelector(`#rack-${entry.rack}`);
               if (!rack) return;
               const index = entry.location - 1;
               const cell = rack.querySelector(`.location[data-index='${index}']`);
-              if (cell) placeAtCell(cell, entry.item, true, entry.id, entry.isCalled);
+              if (cell) {
+                updates.push(() => placeAtCell(cell, entry.item, true, entry.id, entry.isCalled));
+              }
             }
+          });
+          
+          // Apply updates in a single frame
+          requestAnimationFrame(() => {
+            updates.forEach(update => update());
+            document.querySelectorAll('.rack').forEach(updateConnections);
           });
 
           document.querySelectorAll('.rack').forEach(updateConnections);
@@ -171,8 +190,95 @@
 
     // When server signals an item was added/updated, refresh our view from DB
     socket.on("supply_updated", () => {
-      console.log("🔄 Received supply_updated, rebuilding from DB...");
-      refreshAll();
+      console.log("🔄 Supply list updated");
+      // Direct fetch and update approach
+      fetch("/api/items")
+        .then(res => {
+          if (!res.ok) throw new Error(`Failed to fetch items: ${res.status}`);
+          return res.json();
+        })
+        .then(data => {
+          // Clear all current placements
+          document.querySelectorAll('.location').forEach(c => {
+            delete c.dataset.placedName;
+            delete c.dataset.placed;
+            delete c.dataset.rowId;
+            c.querySelectorAll('.cell-item').forEach(n => n.remove());
+            c.classList.remove('connect-left','connect-right');
+          });
+
+          // Place items in grid
+          data.forEach(entry => {
+            if (entry.rack && entry.location) {
+              const rack = document.querySelector(`#rack-${entry.rack}`);
+              if (!rack) return;
+              const index = entry.location - 1;
+              const cell = rack.querySelector(`.location[data-index='${index}']`);
+              if (cell) placeAtCell(cell, entry.item, true, entry.id, entry.isCalled);
+            }
+          });
+
+          // Update rack connections
+          document.querySelectorAll('.rack').forEach(updateConnections);
+
+          // Update palette with unique items
+          const uniqueItems = new Set(data.map(entry => entry.item));
+          const container = document.getElementById('new-items-container');
+          const heading = container.querySelector('h2');
+          container.innerHTML = '';
+          if (heading) container.appendChild(heading);
+
+          Array.from(uniqueItems).sort().forEach(name => {
+            const item = document.createElement('div');
+            item.className = 'item palette-item';
+            item.textContent = name;
+            item.draggable = true;
+
+            // Add delete button
+            const del = document.createElement('button');
+            del.className = 'palette-delete';
+            del.textContent = '✖';
+            del.title = 'Delete this item entirely';
+            del.style.marginLeft = '8px';
+            del.style.background = 'transparent';
+            del.style.border = 'none';
+            del.style.color = '#900';
+            del.style.cursor = 'pointer';
+            del.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              if (!confirm(`Delete all occurrences of "${name}" from database?`)) return;
+              fetch('/api/delete_item_by_name', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `item=${encodeURIComponent(name)}`
+              });
+            });
+
+            item.addEventListener('click', () => {
+              document.querySelectorAll('.palette-item').forEach(x => x.classList.remove('selected'));
+              item.classList.add('selected');
+              selectedItemName = name;
+            });
+            item.addEventListener('dragstart', (evt) => {
+              evt.dataTransfer.setData('text/plain', name);
+              selectedItemName = name;
+            });
+            
+            item.appendChild(del);
+            container.appendChild(item);
+          });
+        })
+        .catch(err => {
+          console.error("Failed to refresh after update:", err);
+          // Retry once after a delay if it failed
+          setTimeout(() => {
+            fetch("/api/items")
+              .then(res => res.json())
+              .then(data => {
+                // ... same update logic as above ...
+              });
+          }, 500);
+        });
     });
 
     socket.on("highlight_keyword", (data) => {
@@ -297,9 +403,7 @@
       grid-template-columns: repeat(5, 100px);
       grid-template-rows: repeat(4, 100px);
       gap: 5px;
-      margin: 20px 0;
-      border: 2px solid #333;
-      padding: 10px;
+      margin: 30px 0;  /* Increased margin to separate racks */
     }
 
     .location {
@@ -371,7 +475,7 @@
     }
 
     /* Placed cell content */
-    .cell-item { padding: 6px; border-radius: 4px; background: #cce5ff; width: 100%; height: 100%; display:flex; align-items:center; justify-content:center; }
+    .cell-item { padding: 6px; border-radius: 4px; width: 100%; height: 100%; display:flex; align-items:center; justify-content:center; }
     .location.placement-blocked { animation: shake 0.25s; }
     .dragging { opacity: 0.5; }
 
@@ -411,9 +515,10 @@
     <h2>Current Items</h2>
   </div>
 
-  <h2>Rack Layout</h2>
   <div id="rack-container">
+    <h2>Rack 1</h2>
     <div class="rack" id="rack-1"></div>
+    <h2>Rack 2</h2>
     <div class="rack" id="rack-2"></div>
   </div>
 
@@ -421,10 +526,54 @@
 
 
   <script>
+    // Color management for items with persistence
+    const itemColors = new Map();
+    
+    // Load saved colors from localStorage
+    const savedColors = JSON.parse(localStorage.getItem('itemColors') || '{}');
+    Object.entries(savedColors).forEach(([name, color]) => {
+      itemColors.set(name, color);
+    });
+
+    function getRandomColor() {
+      // Generate pastel colors for better readability
+      const existingColors = new Set(itemColors.values());
+      let newColor;
+      let attempts = 0;
+      const maxAttempts = 100; // Prevent infinite loop
+      
+      do {
+        const hue = Math.floor(Math.random() * 360);
+        newColor = `hsl(${hue}, 70%, 80%)`;
+        attempts++;
+        
+        // If we've tried too many times, adjust the saturation and lightness slightly
+        if (attempts > maxAttempts / 2) {
+          const sat = 65 + Math.floor(Math.random() * 10);
+          const light = 75 + Math.floor(Math.random() * 10);
+          newColor = `hsl(${hue}, ${sat}%, ${light}%)`;
+        }
+      } while (existingColors.has(newColor) && attempts < maxAttempts);
+      
+      return newColor;
+    }
+
+    function getItemColor(itemName) {
+      if (!itemColors.has(itemName)) {
+        const newColor = getRandomColor();
+        itemColors.set(itemName, newColor);
+        // Save to localStorage
+        const savedColors = JSON.parse(localStorage.getItem('itemColors') || '{}');
+        savedColors[itemName] = newColor;
+        localStorage.setItem('itemColors', JSON.stringify(savedColors));
+      }
+      return itemColors.get(itemName);
+    }
+
     // Build rack grid cells and palette-driven placement
     for (let rackNum = 1; rackNum <= 2; rackNum++) {
       const rack = document.getElementById(`rack-${rackNum}`);
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 20; i++) {  // Changed back to 20 (5 columns × 4 rows)
         const location = document.createElement("div");
         location.className = "location";
         location.dataset.rack = rackNum;
@@ -513,6 +662,33 @@
             });
           }).then(() => {
             console.log('Swapped rows', transferredRowId, 'and', targetRowId);
+            // Fetch updated data and refresh UI
+            return fetch("/api/items")
+              .then(res => res.json())
+              .then(data => {
+                // Clear current placements
+                document.querySelectorAll('.location').forEach(c => {
+                  delete c.dataset.placedName;
+                  delete c.dataset.placed;
+                  delete c.dataset.rowId;
+                  c.querySelectorAll('.cell-item').forEach(n => n.remove());
+                  c.classList.remove('connect-left','connect-right');
+                });
+
+                // Place items in grid
+                data.forEach(entry => {
+                  if (entry.rack && entry.location) {
+                    const rack = document.querySelector(`#rack-${entry.rack}`);
+                    if (!rack) return;
+                    const index = entry.location - 1;
+                    const cell = rack.querySelector(`.location[data-index='${index}']`);
+                    if (cell) placeAtCell(cell, entry.item, true, entry.id, entry.isCalled);
+                  }
+                });
+
+                // Update rack connections
+                document.querySelectorAll('.rack').forEach(updateConnections);
+              });
           }).catch(err => console.warn('Swap failed:', err));
         } else {
           // Normal move to empty slot (or when source not available)
@@ -522,6 +698,33 @@
             body: `id=${encodeURIComponent(transferredRowId)}&rack=${targetRack}&location=${targetLoc}`
           }).then(() => {
             console.log('Moved item on server:', transferredRowId, targetRack, targetLoc);
+            // Fetch updated data and refresh UI
+            return fetch("/api/items")
+              .then(res => res.json())
+              .then(data => {
+                // Clear current placements
+                document.querySelectorAll('.location').forEach(c => {
+                  delete c.dataset.placedName;
+                  delete c.dataset.placed;
+                  delete c.dataset.rowId;
+                  c.querySelectorAll('.cell-item').forEach(n => n.remove());
+                  c.classList.remove('connect-left','connect-right');
+                });
+
+                // Place items in grid
+                data.forEach(entry => {
+                  if (entry.rack && entry.location) {
+                    const rack = document.querySelector(`#rack-${entry.rack}`);
+                    if (!rack) return;
+                    const index = entry.location - 1;
+                    const cell = rack.querySelector(`.location[data-index='${index}']`);
+                    if (cell) placeAtCell(cell, entry.item, true, entry.id, entry.isCalled);
+                  }
+                });
+
+                // Update rack connections
+                document.querySelectorAll('.rack').forEach(updateConnections);
+              });
           }).catch(err => console.warn('Failed to move item:', err));
         }
       } else {
@@ -637,6 +840,8 @@
         cell.appendChild(ci);
       }
       ci.textContent = name;
+      // Apply the unique color for this item
+      ci.style.backgroundColor = getItemColor(name);
       // If this cell corresponds to a DB row, show a small delete button
       if (cell.dataset.rowId) {
         let del = ci.querySelector('.cell-delete');
