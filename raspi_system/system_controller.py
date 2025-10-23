@@ -111,9 +111,26 @@ def voice_thread(ui):
 
                     if result:
                         keyword = result.get("item")
-                        ui.log(
-                            f"Item found: \"{keyword}\"  Location: rack #{result.get('rack')} and location {result.get('location')}\n"
-                        )
+                        # Load full DB and find all instances of this item so we can report every rack/location
+                        try:
+                            full_db = load_database_from_sqlite()
+                            matches = [
+                                e for e in full_db if e.get("item", "").lower() == keyword.lower()
+                            ]
+                        except Exception:
+                            matches = []
+
+                        if matches:
+                            # Format each match as 'rack #X location Y' and join them
+                            locs = ", ".join(
+                                [f"rack #{m.get('rack')} location {m.get('location')}" for m in matches]
+                            )
+                            ui.log(f"Item found: \"{keyword}\"  Instances: {locs}\n")
+                        else:
+                            # Fallback to the single result returned by the NLP parser
+                            ui.log(
+                                f"Item found: \"{keyword}\"  Location: rack #{result.get('rack')} and location {result.get('location')}\n"
+                            )
                         socketio.emit("highlight_keyword", {"keyword": keyword})
 
                         if "thank you" in phrase.lower():

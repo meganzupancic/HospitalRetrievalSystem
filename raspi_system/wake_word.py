@@ -5,7 +5,7 @@ import numpy as np
 import pvporcupine
 import sounddevice as sd
 
-ACCESS_KEY = "u6opFld4V3f6QBSDvUfOP/KFgrojdVzI8H4JghtWNONoxVgqG/kAxQ=="
+ACCESS_KEY = "Ol05Gwg+qgIU/93zUK9BRMO0WknMmDvfs09gwnKUB/1iOkiGAbXu+Q=="
 
 
 def wake_word_listener(
@@ -13,9 +13,36 @@ def wake_word_listener(
 ):
     print("Porcupine wake word thread started.")
 
-    porcupine = pvporcupine.create(
-        access_key=ACCESS_KEY, keywords=["picovoice"]
-    )  # Use built-in wake word
+    porcupine = None
+    try:
+        porcupine = pvporcupine.create(
+            access_key=ACCESS_KEY, keywords=["picovoice"]
+        )  # Use built-in wake word
+    except Exception as e:
+        # Try to detect the specific activation-limit exception class if available
+        activation_error_class = None
+        try:
+            from pvporcupine._porcupine import PorcupineActivationLimitError as activation_error_class
+        except Exception:
+            activation_error_class = getattr(pvporcupine, "PorcupineActivationLimitError", None)
+
+        # Heuristic: either the specific exception or the picovoice error code shows activation limit
+        msg = str(e)
+        if (activation_error_class and isinstance(e, activation_error_class)) or "00000136" in msg or "ActivationLimit" in msg or "activation limit" in msg.lower():
+            ui.log(
+                "Porcupine activation limit reached (Picovoice error 00000136). Wake-word disabled. "
+                "Check ACCESS_KEY, device activations in Picovoice Console, or obtain a valid license.",
+                tag="red",
+            )
+        else:
+            ui.log(f"Porcupine initialization failed: {e}", tag="red")
+        import traceback
+        ui.log(traceback.format_exc(), tag="red")
+
+        # Disable wake-word stream and exit listener thread cleanly
+        wake_stream_active.clear()
+        return
+
     # audio_stream = sd.RawInputStream(
     #     samplerate=porcupine.sample_rate,
     #     blocksize=porcupine.frame_length,

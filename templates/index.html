@@ -5,50 +5,201 @@
   <title>Medical Supplies</title>
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
   <script>
+    // --- Preselector logic ---
+    const preselectors = [
+      { id: 'grp-a', label: 'Group A', cells: [] },
+      { id: 'grp-b', label: 'Group B', cells: [] },
+      { id: 'grp-c', label: 'Group C', cells: [] },
+    ];
+    let activePreselector = null;
+    let isDraggingGroup = false;
+
+    function renderPreselectors() {
+      const container = document.getElementById('preselectors-container');
+      container.innerHTML = '';
+      preselectors.forEach(p => {
+        const el = document.createElement('div');
+        el.className = 'preselector';
+        el.textContent = p.label;
+        el.dataset.id = p.id;
+        el.addEventListener('click', () => {
+          if (activePreselector === p.id) { activePreselector = null; container.classList.remove('active'); document.getElementById('rack-container').classList.remove('grid-dim'); updateAllBadges(); return; }
+          activePreselector = p.id;
+          document.getElementById('rack-container').classList.add('grid-dim');
+          container.querySelectorAll('.preselector').forEach(x => x.classList.toggle('active', x.dataset.id === p.id));
+          updateAllBadges();
+        });
+        container.appendChild(el);
+      });
+    }
+
+    // Toggle group membership on a cell
+    function toggleGroupOnCell(cell, groupId) {
+      const groups = (cell.dataset.groups || '').split(',').filter(Boolean);
+      const i = groups.indexOf(groupId);
+      if (i >= 0) groups.splice(i,1); else groups.push(groupId);
+      cell.dataset.groups = groups.join(',');
+      updateCellBadges(cell);
+    }
+
+    function updateCellBadges(cell) {
+      // remove existing badges
+      cell.querySelectorAll('.group-badge').forEach(b => b.remove());
+      const groups = (cell.dataset.groups || '').split(',').filter(Boolean);
+      if (groups.length === 0) return;
+      // show first group's badge for clarity; you can expand to multiple
+      const badge = document.createElement('div');
+      badge.className = 'group-badge';
+      badge.textContent = groups[0].toUpperCase();
+      cell.appendChild(badge);
+      // visually indicate membership
+      cell.classList.toggle('grouped', groups.length > 0);
+    }
+
+    function updateAllBadges() {
+      document.querySelectorAll('.location').forEach(updateCellBadges);
+    }
+
+    // hook drag interactions when preselector active
+    document.addEventListener('mousedown', (e) => {
+      if (!activePreselector) return;
+      const cell = e.target.closest('.location');
+      if (!cell) return;
+      isDraggingGroup = true;
+      toggleGroupOnCell(cell, activePreselector);
+    });
+    document.addEventListener('mouseover', (e) => {
+      if (!isDraggingGroup || !activePreselector) return;
+      const cell = e.target.closest('.location');
+      if (!cell) return;
+      toggleGroupOnCell(cell, activePreselector);
+    });
+    document.addEventListener('mouseup', () => { isDraggingGroup = false; });
+
+    // init preselectors
+    renderPreselectors();
+    // --- end preselector logic ---
     const socket = io();
+    let selectedItemName = null;
+
+    // Function to refresh palette and grid from server items only
+    function refreshAll() {
+      // Build palette from distinct DB items (includes placeholders)
+      fetch('/api/distinct_items')
+        .then(r => r.json())
+        .then(distinct => {
+          const container = document.getElementById('new-items-container');
+          const heading = container.querySelector('h2');
+          container.innerHTML = '';
+          if (heading) container.appendChild(heading);
+
+          Array.from(distinct).sort().forEach(name => {
+            const item = document.createElement('div');
+            item.className = 'item palette-item';
+            item.textContent = name;
+            item.draggable = true;
+
+            // delete button for removing item entirely
+            const del = document.createElement('button');
+            del.className = 'palette-delete';
+            del.textContent = '✖';
+            del.title = 'Delete this item entirely';
+            del.style.marginLeft = '8px';
+            del.style.background = 'transparent';
+            del.style.border = 'none';
+            del.style.color = '#900';
+            del.style.cursor = 'pointer';
+            del.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              if (!confirm(`Delete all occurrences of "${name}" from database?`)) return;
+              fetch('/api/delete_item_by_name', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `item=${encodeURIComponent(name)}`
+              }).then(res => res.json()).then(j => {
+                console.log('Deleted item by name:', j);
+                refreshAll();
+              }).catch(err => console.warn('Failed to delete item by name:', err));
+            });
+
+            item.addEventListener('click', () => {
+              document.querySelectorAll('.palette-item').forEach(x => x.classList.remove('selected'));
+              item.classList.add('selected');
+              selectedItemName = name;
+            });
+            item.addEventListener('dragstart', (evt) => { evt.dataTransfer.setData('text/plain', name); });
+            
+            item.appendChild(del);
+            container.appendChild(item);
+          });
+
+          // Now fetch full items for grid placements
+          return fetch('/api/items').then(r => r.json());
+        })
+        .then(data => {
+          if (!data) return;
+          // Clear previous placements and redraw grid placements from data
+          document.querySelectorAll('.location').forEach(c => {
+            delete c.dataset.placedName;
+            delete c.dataset.placed;
+            delete c.dataset.rowId;
+            c.querySelectorAll('.cell-item').forEach(n => n.remove());
+            c.classList.remove('connect-left','connect-right');
+          });
+
+          data.forEach(entry => {
+            if (entry.rack && entry.location) {
+              const rack = document.querySelector(`#rack-${entry.rack}`);
+              if (!rack) return;
+              const index = entry.location - 1;
+              const cell = rack.querySelector(`.location[data-index='${index}']`);
+              if (cell) placeAtCell(cell, entry.item, true, entry.id, entry.isCalled);
+            }
+          });
+
+          document.querySelectorAll('.rack').forEach(updateConnections);
+        })
+        .catch(err => console.error('Error refreshing items:', err));
+    }
 
     socket.on("connect", () => {
       console.log("✅ Connected to Socket.IO server");
+      
+      // Initial refresh
+      refreshAll();
+    });
+
+    // When server signals an item was added/updated, refresh our view from DB
+    socket.on("supply_updated", () => {
+      console.log("🔄 Received supply_updated, rebuilding from DB...");
+      refreshAll();
     });
 
     socket.on("highlight_keyword", (data) => {
       const keyword = data.keyword.toLowerCase();
-      console.log("🔍 Highlighting keyword:", keyword);
-
-      const items = document.querySelectorAll(".item-name");
-      items.forEach((el) => {
-        if (el.textContent.toLowerCase().includes(keyword)) {
-          el.classList.add("highlight");
-        } else {
-          el.classList.remove("highlight");
-        }
-      });
-    });
-  </script>
-  <script>
-    socket.on("supply_updated", () => {
-      console.log("🔄 Supply list updated");
-      fetch("/api/items")
-        .then(res => res.json())
-        .then(data => {
-          const supplyList = document.getElementById("supply-list");
-          supplyList.innerHTML = ""; // Clear current list
-
-          data.forEach(entry => {
-            const li = document.createElement("li");
-            li.className = "item-name";
-            li.dataset.keyword = entry.item;
-            li.innerHTML = `
-              ${entry.item} — Rack ${entry.rack}, Location ${entry.location}
-              <form method="POST" action="/delete_by_name" style="display:inline;">
-                <input type="hidden" name="item_name" value="${entry.item}">
-                <button type="submit" class="delete-button" title="Delete">🗑️</button>
-              </form>
-            `;
-            supplyList.appendChild(li);
-          });
+      console.log("Highlighting keyword via server state:", keyword);
+      // Refresh items from server and highlight any entries with isCalled = true
+      fetch('/api/items').then(r => r.json()).then(items => {
+        // Clear existing highlights
+        document.querySelectorAll('.cell-item').forEach(item => item.classList.remove('highlight'));
+        items.forEach(entry => {
+          if (entry.isCalled) {
+            // find cell for this entry by rack/location
+            if (entry.rack && entry.location) {
+              const rack = document.querySelector(`#rack-${entry.rack}`);
+              if (!rack) return;
+              const index = entry.location - 1;
+              const cell = rack.querySelector(`.location[data-index='${index}']`);
+              if (cell) {
+                const ci = cell.querySelector('.cell-item');
+                if (ci) ci.classList.add('highlight');
+              }
+            }
+          }
         });
+      }).catch(err => console.warn('Error fetching items for highlight:', err));
     });
+    
   </script>
 
 
@@ -89,9 +240,56 @@
       border-bottom: 1px solid #ccc;
     }
 
+    /* Items start light blue; when highlighted they smoothly transition to dark blue */
+    /* Generic item used in new-items list */
+    .item {
+      background-color: #cce5ff; /* light blue */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: grab;
+      transition: background-color 0.4s ease, color 0.4s ease, box-shadow 0.3s ease;
+      padding: 8px;
+      border-radius: 4px;
+    }
+
+    /* Rack-placed items are direct children of .rack and should fill grid cells */
+    .rack > .item {
+      width: 100%;
+      height: 100%;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      border-radius: 2px;
+      z-index: 2; /* be above location cells */
+    }
+
+    /* For list entries (li) and shelf items, apply a dark-blue highlight */
+    li.item-name,
+    li.item-name .item {
+      transition: background-color 0.4s ease, color 0.4s ease;
+    }
+
     .highlight {
-      background-color: yellow;
-      transition: background-color 0.5s ease;
+      color: #fff !important;
+      text-shadow: 0 0 10px #fff, 0 0 20px #fff;
+      border: 2px solid #ff0000 !important;
+      box-shadow: 0 0 10px #ff0000, inset 0 0 10px #ff0000;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 10px #ff0000, inset 0 0 10px #ff0000; }
+      50% { box-shadow: 0 0 20px #ff0000, inset 0 0 15px #ff0000; }
+      100% { box-shadow: 0 0 10px #ff0000, inset 0 0 10px #ff0000; }
+    }
+
+    /* Ensure the .item box inside a highlighted list row also glows */
+    li.item-name.highlight .item {
+      color: #fff !important;
+      text-shadow: 0 0 10px #fff, 0 0 20px #fff;
     }
 
     .rack {
@@ -140,14 +338,77 @@
       pointer-events: none;
     }
 
+    .cell-delete { pointer-events: auto; }
+
+    /* Layout items horizontally with equal sizing */
+    #new-items-container {
+      display: flex;
+      flex-direction: row;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      padding: 15px;
+      background: #f5f8ff;
+      border-radius: 8px;
+      margin: 20px 0;
+    }
+
+    #new-items-container .item {
+      width: 120px;
+      height: 80px;
+      padding: 10px;
+      text-align: center;
+      background: #cce5ff;
+      border: 1px solid #99c2ff;
+      border-radius: 6px;
+      cursor: grab;
+      transition: all 0.2s ease;
+    }
+
+    #new-items-container .item:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+
+    /* Placed cell content */
+    .cell-item { padding: 6px; border-radius: 4px; background: #cce5ff; width: 100%; height: 100%; display:flex; align-items:center; justify-content:center; }
+    .location.placement-blocked { animation: shake 0.25s; }
+    .dragging { opacity: 0.5; }
+
+    /* Connection indicators: remove border between connected cells */
+    .location.connect-right { border-right-width: 0; }
+    .location.connect-left { border-left-width: 0; }
+
+    @keyframes shake { 0% { transform: translateX(0); } 25% { transform: translateX(-4px);} 75% { transform: translateX(4px); } 100% { transform: translateX(0);} }
+
+    /* Visual connection: when adjacent cells share same data-placed, remove interior borders */
+    .location[data-placed] { border-color: #007bff; }
+    .location[data-placed] .cell-item { width:100%; height:100%; display:flex; align-items:center; justify-content:center; box-sizing:border-box; }
+    
+  /* Preselector styles */
+  #preselectors-container { display:flex; gap:8px; align-items:center; margin-bottom:12px; }
+  .preselector { padding:6px 10px; background:#fff7e6; border:1px solid #ffd27a; border-radius:6px; cursor:pointer; user-select:none; }
+  .preselector.active { background:#ffd27a; box-shadow:0 4px 12px rgba(0,0,0,0.08); }
+
+  /* Grey-out overlay state for grid when preselector active */
+  .grid-dim .location { opacity: 0.45; transition: opacity 0.12s ease; }
+
+  /* group badge inside a location */
+  .group-badge { position:absolute; top:4px; left:6px; background:#333; color:#fff; font-size:10px; padding:2px 6px; border-radius:8px; opacity:0.9; }
+
   </style>
 </head>
 <body>
   <h1>Create New Item</h1>
   <label>Item Name: <input type="text" id="new-item-name" required></label>
   <button onclick="createNewItem()">Create Item</button>
+  <!-- Pre-selectors: groups you can drag across the grid -->
+  <div id="preselectors-container" style="margin-top: 12px;">
+    <!-- rendered by JS -->
+  </div>
+
   <div id="new-items-container" style="margin-top: 20px;">
-    <h2>New Items (Drag to Shelf)</h2>
+    <h2>Current Items</h2>
   </div>
 
   <h2>Rack Layout</h2>
@@ -156,25 +417,11 @@
     <div class="rack" id="rack-2"></div>
   </div>
 
-  <h2>Current Supplies</h2>
-  <ul id="supply-list">
-    {% for entry in items %}
-      <li class="item-name"
-          data-keyword="{{ entry.item }}"
-          data-rack="{{ entry.rack }}"
-          data-location="{{ entry.location }}">
-        {{ entry.item }} — Rack {{ entry.rack }}, Location {{ entry.location }}
-        <form method="POST" action="/delete_by_name" style="display:inline;">
-          <input type="hidden" name="item_name" value="{{ entry.item }}">
-          <button type="submit" class="delete-button" title="Delete">🗑️</button>
-        </form>
-      </li>
-    {% endfor %}
-  </ul>
+  <!-- Items will be shown in new-items-container -->
 
 
   <script>
-    // Create rack layout
+    // Build rack grid cells and palette-driven placement
     for (let rackNum = 1; rackNum <= 2; rackNum++) {
       const rack = document.getElementById(`rack-${rackNum}`);
       for (let i = 0; i < 20; i++) {
@@ -191,90 +438,365 @@
         label.textContent = i + 1;
         location.appendChild(label);
 
+        // Click to place currently selected palette item
+        location.addEventListener('click', () => {
+          if (selectedItemName) placeAtCell(location, selectedItemName);
+        });
+
         rack.appendChild(location);
       }
     }
 
+    // loadCurrentItems removed - palette is built from DB via refreshAll()
 
     function createNewItem() {
       const name = document.getElementById("new-item-name").value.trim();
       if (!name) return;
-
-      const item = document.createElement("div");
-      item.className = "item";
-      item.textContent = name;
-      item.draggable = true;
-      item.ondragstart = (e) => {
-        e.dataTransfer.setData("text/plain", name);
-      };
-
-      const container = document.getElementById("new-items-container");
-      container.appendChild(item);
-
+      // Add to current_items table so it appears in palette but is not placed
+      console.log('Creating new current item:', name);
+      fetch('/api/current_items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `item=${encodeURIComponent(name)}`
+      })
+      .then(res => {
+        if (!res.ok) throw new Error('Server returned ' + res.status);
+        document.getElementById("new-item-name").value = "";
+        // Rebuild from DB (palette and grid)
+        refreshAll();
+      })
+      .catch(err => {
+        console.warn('Failed to create current item:', err);
+        // ensure visible locally so user sees it
+        addToPaletteIfMissing(name);
+      });
     }
 
     function handleDrop(e) {
-      const itemName = e.dataTransfer.getData("text/plain");
-      const rack = e.currentTarget.dataset.rack;
-      const index = parseInt(e.currentTarget.dataset.index);
-      const shelf = Math.floor(index / 5) + 1;
-      const location = (shelf - 1) * 5 + (index % 5) + 1;
+      e.preventDefault();
+      const itemName = e.dataTransfer.getData("text/plain") || selectedItemName;
+      if (!itemName) {
+        console.warn("No item name in drop event");
+        return;
+      }
+      const cell = e.currentTarget;
+      if (!cell.dataset.rack || !cell.dataset.index) {
+        console.warn("Drop target missing rack/index data");
+        return;
+      }
+      console.log(`Dropping ${itemName} onto rack ${cell.dataset.rack} position ${parseInt(cell.dataset.index) + 1}`);
+      const transferredRowId = e.dataTransfer.getData('application/x-row-id') || null;
+      const targetRowId = cell.dataset.rowId || null;
+      const targetRack = parseInt(cell.dataset.rack, 10);
+      const targetLoc = parseInt(cell.dataset.index, 10) + 1;
 
-      const allItems = document.querySelectorAll(".item");
-      let draggedItem = null;
-      allItems.forEach((el) => {
-        if (el.textContent === itemName) {
-          draggedItem = el;
+      // If dragging an existing placed item (has row id)
+      if (transferredRowId) {
+        const sourceCell = window.__dragSourceCell || null;
+        // If dropped back on same cell, do nothing
+        if (sourceCell && sourceCell === cell) return;
+
+        if (targetRowId && targetRowId !== transferredRowId && sourceCell) {
+          // Swap two existing DB rows: move target -> source, then moved row -> target
+          const sourceRack = parseInt(sourceCell.dataset.rack, 10);
+          const sourceLoc = parseInt(sourceCell.dataset.index, 10) + 1;
+          // Perform moves sequentially to reduce race
+          fetch('/move_item', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `id=${encodeURIComponent(targetRowId)}&rack=${sourceRack}&location=${sourceLoc}`
+          }).then(() => {
+            return fetch('/move_item', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: `id=${encodeURIComponent(transferredRowId)}&rack=${targetRack}&location=${targetLoc}`
+            });
+          }).then(() => {
+            console.log('Swapped rows', transferredRowId, 'and', targetRowId);
+          }).catch(err => console.warn('Swap failed:', err));
+        } else {
+          // Normal move to empty slot (or when source not available)
+          fetch('/move_item', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `id=${encodeURIComponent(transferredRowId)}&rack=${targetRack}&location=${targetLoc}`
+          }).then(() => {
+            console.log('Moved item on server:', transferredRowId, targetRack, targetLoc);
+          }).catch(err => console.warn('Failed to move item:', err));
         }
-      });
+      } else {
+        // No row id -> a palette/new item drop
+        // If target occupied, block drop if dragging from palette
+        if (targetRowId) {
+          cell.classList.add('placement-blocked');
+          setTimeout(() => cell.classList.remove('placement-blocked'), 300);
+          return;
+        }
+        // Create a new DB entry for this placement if cell is empty
+        if (!cell.dataset.placedName) {
+          placeAtCell(cell, itemName);
+        }
+      }
+    }
 
-      if (draggedItem) {
-        e.currentTarget.appendChild(draggedItem);
+    function getUniqueNamesFromSupply() {
+      const names = new Set();
+      document.querySelectorAll('#supply-list .item-name').forEach(li => names.add(li.dataset.keyword));
+      // also include new-items container
+      document.querySelectorAll('#new-items-container .item').forEach(d => names.add(d.textContent));
+      return Array.from(names).filter(Boolean);
+    }
+
+    function buildPalette(uniqueItems) {
+      console.log("Building palette with items:", uniqueItems);
+      const paletteList = document.getElementById('palette-list');
+      if (!paletteList) {
+        console.error("Could not find palette-list element!");
+        return;
+      }
+      paletteList.innerHTML = '';
+      let entries = [];
+      if (!uniqueItems) uniqueItems = [];
+      if (Array.isArray(uniqueItems)) entries = uniqueItems.map(n => ({name: n, count: 1}));
+      else entries = Object.keys(uniqueItems).map(n => ({name: n, count: uniqueItems[n]}));
+
+      entries.forEach(({name, count}) => {
+        const el = document.createElement('div');
+        el.className = 'palette-item';
+        el.textContent = name;
+        el.dataset.name = name;
+        el.draggable = true;
+        if (count > 1) el.classList.add('duplicate');
+
+        el.addEventListener('click', () => {
+          document.querySelectorAll('.palette-item').forEach(x => x.classList.remove('selected'));
+          el.classList.add('selected');
+          selectedItemName = name;
+        });
+
+        el.addEventListener('dragstart', (evt) => {
+          evt.dataTransfer.setData('text/plain', name);
+          selectedItemName = name; // Also set selected name on drag
+        });
+
+        paletteList.appendChild(el);
+      });
+    }
+
+    function addToPaletteIfMissing(name) {
+      if (!name) return;
+      const existing = Array.from(document.querySelectorAll('#new-items-container .item, #palette .palette-item')).some(e => e.textContent === name || e.dataset.name === name);
+      if (!existing) {
+        const paletteList = document.getElementById('palette-list');
+        const el = document.createElement('div');
+        el.className = 'palette-item';
+        el.textContent = name;
+        el.dataset.name = name;
+        el.addEventListener('click', () => {
+          document.querySelectorAll('.palette-item').forEach(x => x.classList.remove('selected'));
+          el.classList.add('selected');
+          selectedItemName = name;
+        });
+        el.addEventListener('dragstart', (evt) => { evt.dataTransfer.setData('text/plain', name); });
+        if (paletteList) {
+          paletteList.appendChild(el);
+        } else {
+          // fallback to new-items-container
+          const container = document.getElementById('new-items-container');
+          container.appendChild(el);
+        }
+      }
+    }
+
+  function placeAtCell(cell, name, skipServerUpdate = false, rowId = null, isCalled = false) {
+      // If cell already has a different item, don't allow placement
+      const existing = cell.dataset.placedName || null;
+      if (existing && existing !== name) {
+        cell.classList.add('placement-blocked');
+        setTimeout(() => cell.classList.remove('placement-blocked'), 300);
+        return;
       }
 
-      // Check if item already exists in the supply list
-      const existingItems = document.querySelectorAll("#supply-list .item-name");
-      let exists = false;
-      existingItems.forEach((el) => {
-        if (el.dataset.keyword === itemName) {
-          exists = true;
+      // Set or update placedName
+      cell.dataset.placedName = name;
+      if (rowId) cell.dataset.rowId = rowId;
+      else delete cell.dataset.rowId;
+      if (isCalled) {
+        // apply highlight class
+        setTimeout(() => {
+          const ci2 = cell.querySelector('.cell-item');
+          if (ci2) ci2.classList.add('highlight');
+        }, 10);
+      }
+      cell.dataset.placed = 'true';
+
+      let ci = cell.querySelector('.cell-item');
+      if (!ci) {
+        ci = document.createElement('div');
+        ci.className = 'cell-item';
+        cell.appendChild(ci);
+      }
+      ci.textContent = name;
+      // If this cell corresponds to a DB row, show a small delete button
+      if (cell.dataset.rowId) {
+        let del = ci.querySelector('.cell-delete');
+        if (!del) {
+          del = document.createElement('button');
+          del.className = 'cell-delete';
+          del.textContent = '✖';
+          del.title = 'Delete this item';
+          del.style.position = 'absolute';
+          del.style.top = '4px';
+          del.style.right = '6px';
+          del.style.background = 'transparent';
+          del.style.border = 'none';
+          del.style.color = '#900';
+          del.style.fontSize = '14px';
+          del.style.cursor = 'pointer';
+          del.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            const rid = cell.dataset.rowId;
+            if (!rid) return;
+            fetch('/delete_item', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: `id=${encodeURIComponent(rid)}`
+            }).then(() => {
+              // Remove the cell item and clean up the cell's data attributes
+              cell.querySelector('.cell-item').remove();
+              delete cell.dataset.placedName;
+              delete cell.dataset.placed;
+              delete cell.dataset.rowId;
+              // Update rack connections after removal
+              const rackId = cell.dataset.rack;
+              const rack = document.querySelector(`#rack-${rackId}`);
+              updateConnections(rack);
+              console.log('Deleted row', rid);
+            }).catch(e => console.warn('Delete failed', e));
+          });
+          ci.appendChild(del);
+        }
+      }
+      // Listen for custom event to refresh UI when rowId attached later
+      ci.addEventListener('refreshRowUI', () => {
+        // when rowId is set after initial placement, ensure delete exists
+        if (cell.dataset.rowId) {
+          let del = ci.querySelector('.cell-delete');
+          if (!del) {
+            del = document.createElement('button');
+            del.className = 'cell-delete';
+            del.textContent = '✖';
+            del.title = 'Delete this item';
+            del.style.position = 'absolute';
+            del.style.top = '4px';
+            del.style.right = '6px';
+            del.style.background = 'transparent';
+            del.style.border = 'none';
+            del.style.color = '#900';
+            del.style.fontSize = '14px';
+            del.style.cursor = 'pointer';
+            del.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              const rid = cell.dataset.rowId;
+              if (!rid) return;
+              fetch('/delete_item', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `id=${encodeURIComponent(rid)}`
+              }).then(() => {
+                // Remove the cell item and clean up the cell's data attributes
+                cell.querySelector('.cell-item').remove();
+                delete cell.dataset.placedName;
+                delete cell.dataset.placed;
+                delete cell.dataset.rowId;
+                // Update rack connections after removal
+                const rackId = cell.dataset.rack;
+                const rack = document.querySelector(`#rack-${rackId}`);
+                updateConnections(rack);
+                console.log('Deleted row', rid);
+              }).catch(e => console.warn('Delete failed', e));
+            });
+            ci.appendChild(del);
+          }
         }
       });
+      // make the placed cell draggable so user can move it
+      ci.draggable = true;
+      // store reference to the parent cell for drag source
+      ci.addEventListener('dragstart', (evt) => {
+        // set the name in transfer for drop handlers
+        evt.dataTransfer.setData('text/plain', name);
+        // if this placed item has a DB id, set it in transfer so a move can update the DB
+        if (cell.dataset.rowId) evt.dataTransfer.setData('application/x-row-id', cell.dataset.rowId);
+        // mark this cell as the source for a potential move
+        window.__dragSourceCell = cell;
+        // small visual cue
+        cell.classList.add('dragging');
+      });
 
-      const endpoint = exists ? "/update_location" : "/add_item";
+      ci.addEventListener('dragend', (evt) => {
+        // clear drag source and visual
+        if (window.__dragSourceCell) {
+          window.__dragSourceCell.classList.remove('dragging');
+        }
+        window.__dragSourceCell = null;
+      });
 
-      fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `item=${encodeURIComponent(itemName)}&rack=${rack}&location=${location}`
-      }).then(() => console.log(`📦 ${exists ? "Updated" : "Added"} ${itemName} → Rack ${rack}, Location ${location}`));
+      // update visual connections in that rack
+      const rackId = cell.dataset.rack;
+      const rack = document.querySelector(`#rack-${rackId}`);
+      updateConnections(rack);
+
+      // Always add a new entry for this item at this location (unless skipServerUpdate)
+      if (!skipServerUpdate) {
+        try {
+          const rackNum = parseInt(cell.dataset.rack, 10);
+          const locNum = parseInt(cell.dataset.index, 10) + 1;
+          fetch('/add_item', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `item=${encodeURIComponent(name)}&rack=${rackNum}&location=${locNum}`
+          }).then(res => res.json())
+          .then(json => {
+            // attach returned row id immediately so delete UI is available
+            if (json && json.id) {
+              cell.dataset.rowId = json.id;
+              // ensure delete button is present
+              const ciLocal = cell.querySelector('.cell-item');
+              if (ciLocal) {
+                // trigger UI path that adds delete button
+                const ev = new Event('refreshRowUI');
+                ciLocal.dispatchEvent(ev);
+              }
+            }
+            console.log('Added new item to server:', name, rackNum, locNum, json);
+          }).catch(err => {
+            console.warn('Failed to add new item:', err);
+          });
+        } catch (e) {
+          console.warn('Error while adding item:', e);
+        }
+      }
+    }
+
+    function updateConnections(rack) {
+      const cells = Array.from(rack.querySelectorAll('.location'));
+      cells.forEach(c => { c.classList.remove('connect-left','connect-right'); });
+      for (let i = 0; i < cells.length; i++) {
+        const c = cells[i];
+        const right = cells[i+1];
+        if (!right) continue;
+        if (c.dataset.placedName && right.dataset.placedName && c.dataset.placedName === right.dataset.placedName) {
+          c.classList.add('connect-right');
+          right.classList.add('connect-left');
+        }
+      }
     }
   </script>
   <script>
     window.addEventListener("DOMContentLoaded", () => {
-      const items = document.querySelectorAll(".item-name");
-
-      items.forEach((el) => {
-        const name = el.dataset.keyword;
-        const rack = el.dataset.rack;
-        const location = parseInt(el.dataset.location);
-
-        // Calculate grid index from location
-        const index = location - 1;
-        const rackContainer = document.querySelector(`#rack-${rack}`);
-        const targetCell = rackContainer.querySelector(`.location[data-index="${index}"]`);
-
-        if (targetCell) {
-          const itemDiv = document.createElement("div");
-          itemDiv.className = "item";
-          itemDiv.textContent = name;
-          itemDiv.draggable = true;
-          itemDiv.ondragstart = (e) => {
-            e.dataTransfer.setData("text/plain", name);
-          };
-          targetCell.appendChild(itemDiv);
-        }
-      });
+      // Rebuild UI from database (palette from distinct items + grid placements)
+      refreshAll();
     });
   </script>
 </body>
