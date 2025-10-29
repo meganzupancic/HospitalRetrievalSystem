@@ -1,13 +1,15 @@
 # Convertes audio to text using offline STT engine (Vosk)
 # class SpeechToTextProcessor
 ###___________________________________________________________________________________________________
+
+# speech_to_text.py
 import json
 import queue
 
 import sounddevice as sd
 import vosk
 
-model_path = "vosk_model\\vosk-model-small-en-us-0.15"
+model_path = "vosk_model/vosk-model-small-en-us-0.15"
 
 model = vosk.Model(model_path)  # Path to your Vosk model folder
 q = queue.Queue()
