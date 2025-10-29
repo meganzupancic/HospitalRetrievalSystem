@@ -19,7 +19,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import threading
 
 # import tkinter as tk
-from datetime import time
+import time
 
 # from tkinter import scrolledtext
 import pyttsx3
@@ -29,7 +29,9 @@ from raspi_system.database_manager import load_database_from_sqlite
 from raspi_system.motion_handler import motion_listener
 from raspi_system.nlp_parser import find_keyword
 from raspi_system.speech_to_text import listen_and_transcribe
-from raspi_system.wake_word import wake_word_listener
+
+# from raspi_system.wake_word import wake_word_listener
+from raspi_system.vosk_wake_word import wake_word_listener
 
 # from socketio_instance import socketio
 
