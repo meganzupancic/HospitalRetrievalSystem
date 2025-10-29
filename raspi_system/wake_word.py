@@ -5,17 +5,51 @@ import numpy as np
 import pvporcupine
 import sounddevice as sd
 
-ACCESS_KEY = "u6opFld4V3f6QBSDvUfOP/KFgrojdVzI8H4JghtWNONoxVgqG/kAxQ=="
+# ACCESS_KEY = "u6opFld4V3f6QBSDvUfOP/KFgrojdVzI8H4JghtWNONoxVgqG/kAxQ=="
 
 
-def wake_word_listener(
-    trigger_event, shutdown_flag, pause_event, wake_stream_active, ui
-):
+def wake_word_listener(trigger_event, shutdown_flag, pause_event, wake_stream_active):
     print("Porcupine wake word thread started.")
 
-    porcupine = pvporcupine.create(
-        access_key=ACCESS_KEY, keywords=["picovoice"]
-    )  # Use built-in wake word
+    porcupine = None
+    try:
+        porcupine = pvporcupine.create(
+            access_key=ACCESS_KEY, keywords=["picovoice"]
+        )  # Use built-in wake word
+    except Exception as e:
+        # Try to detect the specific activation-limit exception class if available
+        activation_error_class = None
+        try:
+            from pvporcupine._porcupine import (
+                PorcupineActivationLimitError as activation_error_class,
+            )
+        except Exception:
+            activation_error_class = getattr(
+                pvporcupine, "PorcupineActivationLimitError", None
+            )
+
+        # Heuristic: either the specific exception or the picovoice error code shows activation limit
+        msg = str(e)
+        if (
+            (activation_error_class and isinstance(e, activation_error_class))
+            or "00000136" in msg
+            or "ActivationLimit" in msg
+            or "activation limit" in msg.lower()
+        ):
+            print(
+                "Porcupine activation limit reached (Picovoice error 00000136). Wake-word disabled. "
+                "Check ACCESS_KEY, device activations in Picovoice Console, or obtain a valid license."
+            )
+        else:
+            print(f"Porcupine initialization failed: {e}")
+        import traceback
+
+        print(traceback.format_exc())
+
+        # Disable wake-word stream and exit listener thread cleanly
+        wake_stream_active.clear()
+        return
+
     # audio_stream = sd.RawInputStream(
     #     samplerate=porcupine.sample_rate,
     #     blocksize=porcupine.frame_length,
@@ -37,7 +71,7 @@ def wake_word_listener(
                         pcm = np.frombuffer(pcm, dtype=np.int16)
                         keyword_index = porcupine.process(pcm)
                         if keyword_index >= 0:
-                            ui.log("Wake word detected!", tag="green")
+                            # ui.log("Wake word detected!", tag="green")
                             trigger_event.set()
                             pause_event.set()
                             wake_stream_active.clear()  # Fully stop Porcupine

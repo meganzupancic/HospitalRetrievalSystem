@@ -17,10 +17,11 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import threading
-import tkinter as tk
-from datetime import time
-from tkinter import scrolledtext
 
+# import tkinter as tk
+import time
+
+# from tkinter import scrolledtext
 import pyttsx3
 
 # from app import socketio
@@ -28,8 +29,11 @@ from raspi_system.database_manager import load_database_from_sqlite
 from raspi_system.motion_handler import motion_listener
 from raspi_system.nlp_parser import find_keyword
 from raspi_system.speech_to_text import listen_and_transcribe
-from raspi_system.wake_word import wake_word_listener
-from socketio_instance import socketio
+
+# from raspi_system.wake_word import wake_word_listener
+from raspi_system.vosk_wake_word import wake_word_listener
+
+# from socketio_instance import socketio
 
 engine = pyttsx3.init()
 voice_trigger = threading.Event()
@@ -53,40 +57,45 @@ wake_stream_active.set()
 #         print(f"Error sending to frontend: {e}")
 
 
-class SystemUI:
-    def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("System Controller Monitor")
+# class SystemUI:
+#     def __init__(self):
+#         self.root = tk.Tk()
+#         self.root.title("System Controller Monitor")
 
-        self.output_text = scrolledtext.ScrolledText(
-            self.root, width=80, height=25, font=("Courier", 12)
-        )
-        self.output_text.pack(padx=10, pady=10)
+#         self.output_text = scrolledtext.ScrolledText(
+#             self.root, width=80, height=25, font=("Courier", 12)
+#         )
+#         self.output_text.pack(padx=10, pady=10)
 
-        self.output_text.tag_config("green", foreground="green")
+#         # Configure text colors for different message types
+#         self.output_text.tag_config("green", foreground="green")
+#         self.output_text.tag_config("blue", foreground="#0066cc")
+#         self.output_text.tag_config("purple", foreground="#6600cc")
+#         self.output_text.tag_config("orange", foreground="#ff6600")
+#         self.output_text.tag_config("bold", font=("Courier", 12, "bold"))
 
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+#         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        # Initial welcome message
-        self.log(
-            "Welcome to the Hospital Retrieval System (prototype). \n"
-            "Please say the wake word to begin..."
-        )
+#         # Initial welcome message
+#         self.log(
+#             "Welcome to the Hospital Retrieval System (prototype). \n"
+#             "Please say the wake word to begin..."
+#         )
 
-    def log(self, message, tag=None):
-        self.output_text.insert(tk.END, message + "\n", tag)
-        self.output_text.see(tk.END)
-        self.root.update()
+#     def log(self, message, tag=None):
+#         self.output_text.insert(tk.END, message + "\n", tag)
+#         self.output_text.see(tk.END)
+#         self.root.update()
 
-    def run(self):
-        self.root.mainloop()
+#     def run(self):
+#         self.root.mainloop()
 
-    def on_close(self):
-        shutdown_flag.set()
-        self.root.destroy()
+#     def on_close(self):
+#         shutdown_flag.set()
+#         self.root.destroy()
 
 
-def voice_thread(ui):
+def voice_thread():
     print("Voice thread started. Waiting for trigger...")
     # try:
     #     db = load_database_from_sqlite()
@@ -105,20 +114,51 @@ def voice_thread(ui):
                         break
 
                     db = load_database_from_sqlite()
-                    ui.log(f"Heard: {phrase}")
+                    # print(f"Heard: {phrase}")
                     result = find_keyword(phrase, db)
                     print(f"Keyword match result: {result}")
 
                     if result:
                         keyword = result.get("item")
-                        ui.log(
-                            f"Item found: \"{keyword}\"  Location: rack #{result.get('rack')} and location {result.get('location')}\n"
-                        )
-                        socketio.emit("highlight_keyword", {"keyword": keyword})
+                        # Load full DB and find all instances of this item so we can report every rack/location
+                        try:
+                            full_db = load_database_from_sqlite()
+                            matches = [
+                                e
+                                for e in full_db
+                                if e.get("item", "").lower() == keyword.lower()
+                            ]
+                        except Exception:
+                            matches = []
+
+                        if matches:
+                            # Create header for multiple instances with highlighting
+                            # ui.log(f"Item found: ", tag="bold")
+                            # ui.log(f"\"{keyword}\"", tag="blue")
+                            # ui.log("\nLocations:", tag="orange")
+                            # # Log each instance on a new line with highlighting
+                            # for m in matches:
+                            #     location_text = f"  • Rack #{m.get('rack')} Location {m.get('location')}"
+                            #     ui.log(location_text, tag="purple")
+                            # ui.log("") # Empty line for spacing
+                            print(f"Item '{keyword}' found in multiple locations:")
+                            for m in matches:
+                                location_text = f"  • Rack #{m.get('rack')} Location {m.get('location')}"
+                                print(location_text)
+                        else:
+                            # Fallback to the single result returned by the NLP parser
+                            # ui.log(f"Item found: ", tag="bold")
+                            # ui.log(f"\"{keyword}\"", tag="blue")
+                            # location_text = f"\n  • Rack #{result.get('rack')} Location {result.get('location')}"
+                            # ui.log(location_text, tag="purple")
+                            # ui.log("")  # Empty line for spacing
+                            print(f'Item found: "{keyword}"')
+                            location_text = f"  • Rack #{result.get('rack')} Location {result.get('location')}"
+                        # socketio.emit("highlight_keyword", {"keyword": keyword})
 
                         if "thank you" in phrase.lower():
                             response = "You're welcome!"
-                            ui.log(response)
+                            print(response)
 
             except GeneratorExit:
                 break
@@ -131,16 +171,16 @@ def voice_thread(ui):
 
 
 def run_system():
-    ui = SystemUI()
-    t1 = threading.Thread(target=voice_thread, args=(ui,), daemon=True)
+    # ui = SystemUI()
+    t1 = threading.Thread(target=voice_thread, args=(), daemon=True)
     t2 = threading.Thread(
         target=motion_listener,
-        args=(voice_trigger, shutdown_flag, pause_event, ui),
+        args=(voice_trigger, shutdown_flag, pause_event),
         daemon=True,
     )
     t3 = threading.Thread(
         target=wake_word_listener,
-        args=(voice_trigger, shutdown_flag, pause_event, wake_stream_active, ui),
+        args=(voice_trigger, shutdown_flag, pause_event, wake_stream_active),
         daemon=True,
     )
 
@@ -148,7 +188,7 @@ def run_system():
     t2.start()
     t3.start()
 
-    ui.run()
+    # ui.run()
 
 
 # def speak(text):
