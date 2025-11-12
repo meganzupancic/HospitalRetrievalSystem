@@ -175,7 +175,7 @@ def run_system():
     t1 = threading.Thread(target=voice_thread, args=(), daemon=True)
     t2 = threading.Thread(
         target=motion_listener,
-        args=(voice_trigger, shutdown_flag, pause_event),
+        args=(voice_trigger, shutdown_flag, pause_event, wake_stream_active),
         daemon=True,
     )
     t3 = threading.Thread(

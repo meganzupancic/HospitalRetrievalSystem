@@ -10,6 +10,9 @@ model_path = "vosk_model/vosk-model-small-en-us-0.15"
 model = vosk.Model(model_path)
 q = queue.Queue()
 
+# test to see if sound device is working
+print(sd.query_devices())
+
 
 def callback(indata, frames, time, status):
     if status:

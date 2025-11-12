@@ -7,6 +7,8 @@
 import signal
 import time
 
+import RPi.GPIO as GPIO
+
 print("✅ Starting imports...")
 
 try:
@@ -20,6 +22,9 @@ except Exception as e:
 def signal_handler(sig, frame):
     print("Shutting down system...")
     shutdown_flag.set()
+    time.sleep(1)  # Give threads time to exit
+    GPIO.cleanup()
+    print("System shut down.")
     # Do NOT call sys.exit(0) here — let threads exit naturally
 
 
