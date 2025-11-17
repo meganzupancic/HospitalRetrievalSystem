@@ -23,6 +23,12 @@ import time
 
 # from tkinter import scrolledtext
 import pyttsx3
+import asyncio
+import time
+from bleak import BleakClient
+
+DEVICE_ADDRESS = "C6:10:17:BD:9F:7F"  # your Nordic_LBS MAC
+LBS_LED_CHAR_UUID = "00001525-1212-efde-1523-785feabcd123"
 
 # from app import socketio
 from raspi_system.database_manager import load_database_from_sqlite
@@ -42,57 +48,24 @@ shutdown_flag = threading.Event()
 wake_stream_active = threading.Event()
 wake_stream_active.set()
 
-# init_db()
-# db = load_database_from_sqlite("medical_supplies.db")
 
-
-# def send_location_to_frontend(location_id):
-#     try:
-#         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-#         sock.connect(("localhost", 5050))
-#         message = f"HIGHLIGHT:{location_id}"
-#         sock.sendall(message.encode())
-#         sock.close()
-#     except Exception as e:
-#         print(f"Error sending to frontend: {e}")
-
-
-# class SystemUI:
-#     def __init__(self):
-#         self.root = tk.Tk()
-#         self.root.title("System Controller Monitor")
-
-#         self.output_text = scrolledtext.ScrolledText(
-#             self.root, width=80, height=25, font=("Courier", 12)
-#         )
-#         self.output_text.pack(padx=10, pady=10)
-
-#         # Configure text colors for different message types
-#         self.output_text.tag_config("green", foreground="green")
-#         self.output_text.tag_config("blue", foreground="#0066cc")
-#         self.output_text.tag_config("purple", foreground="#6600cc")
-#         self.output_text.tag_config("orange", foreground="#ff6600")
-#         self.output_text.tag_config("bold", font=("Courier", 12, "bold"))
-
-#         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-
-#         # Initial welcome message
-#         self.log(
-#             "Welcome to the Hospital Retrieval System (prototype). \n"
-#             "Please say the wake word to begin..."
-#         )
-
-#     def log(self, message, tag=None):
-#         self.output_text.insert(tk.END, message + "\n", tag)
-#         self.output_text.see(tk.END)
-#         self.root.update()
-
-#     def run(self):
-#         self.root.mainloop()
-
-#     def on_close(self):
-#         shutdown_flag.set()
-#         self.root.destroy()
+async def light_led_for_seconds(seconds=5):
+    client = BleakClient(DEVICE_ADDRESS)
+    try:
+        await client.connect()
+        print("Connected to Nordic board.")
+        # Turn LED ON
+        await client.write_gatt_char(LBS_LED_CHAR_UUID, bytearray([0x01]), response=True)
+        print("LED ON")
+        await asyncio.sleep(seconds)
+        # Turn LED OFF
+        await client.write_gatt_char(LBS_LED_CHAR_UUID, bytearray([0x00]), response=True)
+        print("LED OFF")
+    finally:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
 
 def voice_thread():
@@ -132,29 +105,17 @@ def voice_thread():
                             matches = []
 
                         if matches:
-                            # Create header for multiple instances with highlighting
-                            # ui.log(f"Item found: ", tag="bold")
-                            # ui.log(f"\"{keyword}\"", tag="blue")
-                            # ui.log("\nLocations:", tag="orange")
-                            # # Log each instance on a new line with highlighting
-                            # for m in matches:
-                            #     location_text = f"  • Rack #{m.get('rack')} Location {m.get('location')}"
-                            #     ui.log(location_text, tag="purple")
-                            # ui.log("") # Empty line for spacing
                             print(f"Item '{keyword}' found in multiple locations:")
                             for m in matches:
                                 location_text = f"  • Rack #{m.get('rack')} Location {m.get('location')}"
                                 print(location_text)
                         else:
-                            # Fallback to the single result returned by the NLP parser
-                            # ui.log(f"Item found: ", tag="bold")
-                            # ui.log(f"\"{keyword}\"", tag="blue")
-                            # location_text = f"\n  • Rack #{result.get('rack')} Location {result.get('location')}"
-                            # ui.log(location_text, tag="purple")
-                            # ui.log("")  # Empty line for spacing
                             print(f'Item found: "{keyword}"')
                             location_text = f"  • Rack #{result.get('rack')} Location {result.get('location')}"
                         # socketio.emit("highlight_keyword", {"keyword": keyword})
+
+                        # Trigger LED light on Nordic board
+                        asyncio.run(light_led_for_seconds(5))
 
                         if "thank you" in phrase.lower():
                             response = "You're welcome!"

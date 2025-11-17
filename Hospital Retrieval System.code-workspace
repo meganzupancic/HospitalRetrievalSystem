@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "v2.9.2",
+			"path": "../../../../ncs/v2.9.2"
+		}
+	],
+	"settings": {
+		"nrf-connect.applications": [
+			"c:\\ncs\\v2.9.2\\nrf\\samples\\bluetooth\\peripheral_lbs"
+		]
+	}
+}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Rack</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <!-- Top yellow bar -->
+  <header class="top-bar">
+    <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo" class="top-bar-image">
+  </header>
+
+  <!-- Icon row under the bar -->
+  <div class="icon-row">
+    <img src="{{ url_for('static', filename='icons/clipboard.svg') }}" alt="Clipboard Icon" class="icon">
+    <span id="item-name-label" class="icon-label"><strong>Item Name:</strong> <span id="item-name-value"></span></span>
+  </div>
+  <div class="icon-row">
+    <img src="{{ url_for('static', filename='icons/pin.svg') }}" alt="Pin Icon" class="icon">
+    <span id="location-label" class="icon-label"><strong>Location:</strong> <span id="location-value"></span></span>
+  </div>
+  <div class="icon-row">
+    <img src="{{ url_for('static', filename='icons/tag.svg') }}" alt="Tag Icon" class="icon">
+    <span id="tags-label" class="icon-label"><strong>Tags:</strong> <span id="tags-value"></span></span>
+  </div>
+  <div class="icon-row">
+    <img src="{{ url_for('static', filename='icons/comment.svg') }}" alt="Comment Icon" class="icon">
+    <span id="other-names-label" class="icon-label"><strong>Other Names:</strong> <span id="other-names-value"></span></span>
+  </div>
+
+  <!-- Main content -->
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

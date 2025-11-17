@@ -1,161 +1,249 @@
 # app.py
+from flask import Flask, jsonify, render_template, request
 
-from flask import jsonify, redirect, render_template, request
+from db import get_conn, init_db
 
-# from flask_socketio import SocketIO
-from raspi_system.database_manager import (
-    add_or_update_item,
-    delete_item_by_name,
-    init_db,
-    load_database_from_sqlite,
-    update_item_by_id,
-    delete_item_by_id,
-    add_current_item,
-    get_current_items,
-    delete_current_item,
-    get_distinct_items,
-)
-from socketio_instance import app, socketio
+app = Flask(__name__)
 
-# app = Flask(__name__)
-# socketio = SocketIO(app, cors_allowed_origins="*")
 init_db()
 
-
-@app.route("/", methods=["GET", "POST"])
-def index():
-    if request.method == "POST":
-        item = request.form["item"]
-        rack = int(request.form["rack"])
-        location = int(request.form["location"])
-        add_or_update_item(item, rack, location)
-        return redirect("/")
-
-    items = load_database_from_sqlite()
-    return render_template("index.html", items=items)
+import hashlib
 
 
-@app.route("/add_item", methods=["POST"])
-def add_item_route():
-    print("\n📝 /add_item received:", request.form)
-    item = request.form["item"]
-    rack = int(request.form["rack"])
-    location = int(request.form["location"])
-    print(f"➡️ Adding item '{item}' at rack {rack}, location {location}")
-    
-    # Add item to DB
-    new_id = add_or_update_item(item, rack, location)
-    
-    # Verify it was added by loading DB
-    items = load_database_from_sqlite()
-    matching = [i for i in items if i["item"] == item and i["rack"] == rack and i["location"] == location]
-    print(f"✓ Found {len(matching)} matching items in DB after add")
-    
-    # Emit update
-    socketio.emit("supply_updated")
-    print("✅ Item added and supply_updated emitted")
-    return jsonify({"id": new_id, "item": item, "rack": rack, "location": location}), 201
+def color_for_item(label):
+    if not label:
+        return "#e0e0e0"  # default gray for empty slots
+
+    # Hash the label to get a reproducible integer
+    h = int(hashlib.md5(label.encode()).hexdigest(), 16)
+
+    # Extract RGB components from the hash
+    r = (h >> 16) & 0xFF
+    g = (h >> 8) & 0xFF
+    b = h & 0xFF
+
+    # Blend each channel with white (e.g. 70% original + 30% white)
+    pastel_factor = 0.7
+    r = int(r * pastel_factor + 255 * (1 - pastel_factor))
+    g = int(g * pastel_factor + 255 * (1 - pastel_factor))
+    b = int(b * pastel_factor + 255 * (1 - pastel_factor))
+
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
-@app.route("/delete_by_name", methods=["POST"])
-def delete_by_name():
-    item_name = request.form["item_name"]
-    delete_item_by_name(item_name)
-    return redirect("/")
+def pad_slots(slots, cols=10, rows=5):
+    total = cols * rows
+    padded = slots[:]
+    while len(padded) < total:
+        padded.append(
+            {
+                "slot_id": None,
+                "item_id": None,
+                "label": "",
+                "color": "#e0e0e0",  # <-- add color here
+                "row": (len(padded) // cols) + 1,
+                "col": (len(padded) % cols) + 1,
+                "location_numbers": [str(len(padded) + 1)],
+            }
+        )
+    return padded
 
 
-@app.route("/update_location", methods=["POST"])
-def update_location():
-    item = request.form["item"]
-    rack = int(request.form["rack"])
-    location = int(request.form["location"])
-    add_or_update_item(item, rack, location)
+def get_rack(rack_id=1):
+    conn = get_conn()
+    rack = conn.execute("SELECT * FROM racks WHERE id=?", (rack_id,)).fetchone()
+    slots = conn.execute(
+        """
+        SELECT rs.id AS slot_id,
+            rs.row,
+            rs.col,
+            i.id AS item_id,
+            i.label
+        FROM rack_slots rs
+        LEFT JOIN item_slots islots 
+            ON islots.slot_id = rs.id AND islots.rack_id = rs.rack_id
+        LEFT JOIN items i ON i.id = islots.item_id
+        WHERE rs.rack_id=?
+        ORDER BY rs.row, rs.col
+    """,
+        (rack_id,),
+    ).fetchall()
+    conn.close()
 
-    socketio.emit("supply_updated")
+    slots = [dict(s) for s in slots]
 
-    return "Updated", 200
+    # Build mapping: item_id -> list of slot_ids
+    item_locations = {}
+    for s in slots:
+        if s["item_id"]:
+            item_locations.setdefault(s["item_id"], []).append(str(s["slot_id"]))
 
+    # Attach location_numbers and color
+    for s in slots:
+        if s["item_id"]:
+            s["location_numbers"] = item_locations[s["item_id"]]
+        else:
+            s["location_numbers"] = [str(s["slot_id"])]
+        s["color"] = color_for_item(s["label"])
 
-@app.route("/move_item", methods=["POST"])
-def move_item():
-    # Expects form fields: id, rack, location
-    row_id = int(request.form.get("id"))
-    rack = int(request.form.get("rack"))
-    location = int(request.form.get("location"))
-    print(f"Moving DB row {row_id} to rack {rack}, location {location}")
-    update_item_by_id(row_id, rack, location)
-    socketio.emit("supply_updated")
-    return "Moved", 200
-
-
-@app.route("/delete_item", methods=["POST"])
-def delete_item():
-    # Expects form field: id
-    row_id = int(request.form.get("id"))
-    print(f"Deleting DB row {row_id}")
-    delete_item_by_id(row_id)
-    socketio.emit("supply_updated")
-    return "Deleted", 200
-
-
-@app.route("/api/items")
-def get_items():
-    items = load_database_from_sqlite()
-    return jsonify(items)
-
-
-@app.route("/api/distinct_items")
-def get_distinct_items_route():
-    items = get_distinct_items()
-    return jsonify(items)
-
-@app.route('/api/delete_item_by_name', methods=['POST'])
-def api_delete_item_by_name():
-    # Accept form-encoded or JSON
-    item = request.form.get('item') or (request.get_json() or {}).get('item')
-    if not item:
-        return jsonify({'error': 'item required'}), 400
-    print(f"Deleting all occurrences of item: {item}")
-    try:
-        delete_item_by_name(item)
-        # Also remove from current_items table if present
-        try:
-            delete_current_item(item)
-        except Exception:
-            pass
-        socketio.emit('supply_updated')
-        return jsonify({'status': 'deleted', 'item': item}), 200
-    except Exception as e:
-        print('Error deleting item by name:', e)
-        return jsonify({'error': str(e)}), 500
-
-@app.route("/api/current_items")
-def get_current_items_route():
-    items = get_current_items()
-    return jsonify(items)
-
-@app.route("/api/current_items", methods=["POST"])
-def add_current_item_route():
-    item = request.form.get("item")
-    if not item:
-        return "Item name required", 400
-    add_current_item(item)
-    return "Added", 200
-
-@app.route("/api/current_items", methods=["DELETE"])
-def delete_current_item_route():
-    item = request.args.get("item")
-    if not item:
-        return "Item name required", 400
-    delete_current_item(item)
-    return "Deleted", 200
+    # Pad to full grid
+    slots = pad_slots(slots, cols=rack["cols"], rows=rack["rows"])
+    return rack, slots
 
 
-@app.route("/test_emit")
-def test_emit():
-    socketio.emit("highlight_keyword", {"keyword": "band aid"})
-    return "Test event emitted"
+def group_slots(slots, cols=10, rows=5):
+    grouped_rows = []
+    # group slots by row number
+    slots_by_row = {}
+    for s in slots:
+        slots_by_row.setdefault(s["row"], []).append(s)
+
+    for r in range(1, rows + 1):  # force all rows
+        row = sorted(slots_by_row.get(r, []), key=lambda x: x["col"])
+        # pad with empty slots if fewer than cols
+        while len(row) < cols:
+            row.append(
+                {
+                    "slot_id": None,
+                    "item_id": None,
+                    "label": "",
+                    "color": "#e0e0e0",
+                    "row": r,
+                    "col": len(row) + 1,
+                }
+            )
+        merged = []
+        c = 0
+        while c < cols:
+            s = row[c]
+            span = 1
+            while (
+                c + span < cols
+                and row[c + span]["item_id"] == s["item_id"]
+                and s["item_id"]
+            ):
+                span += 1
+            merged.append({"slot": s, "span": span, "color": s["color"]})
+            c += span
+        grouped_rows.append(merged)
+    return grouped_rows
+
+
+@app.get("/")
+def rack_view():
+    rack_id = int(request.args.get("rack", 1))  # default to rack 1
+    rack, slots = get_rack(rack_id)
+
+    # Use the rack's own cols/rows from the DB
+    rows = group_slots(slots, cols=rack["cols"], rows=rack["rows"])
+
+    edit_mode = request.args.get("edit") == "1"
+    return render_template(
+        "rack.html",
+        rack=rack,
+        slots=slots,
+        rows=rows,
+        edit_mode=edit_mode,
+        cols=rack["cols"],
+        rows_count=rack["rows"],
+    )
+
+
+@app.post("/items")
+def create_item():
+    label = request.json.get("label")
+    if not label:
+        return jsonify({"error": "Label required"}), 400
+    conn = get_conn()
+    cur = conn.execute("INSERT INTO items(label) VALUES(?)", (label,))
+    item_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return jsonify({"item_id": item_id, "label": label})
+
+
+@app.post("/place")
+def place_item():
+    data = request.get_json()
+    item_id = data.get("item_id")
+    slot_ids = data.get("slot_ids", [])
+    rack_id = data.get("rack_id")
+    label = data.get("label")
+
+    # Basic validation
+    if not rack_id:
+        return jsonify({"error": "rack_id is required"}), 400
+    if not slot_ids:
+        return jsonify({"error": "slot_ids is required"}), 400
+    if not label and not item_id:
+        return jsonify({"error": "label is required when creating new item"}), 400
+
+    conn = get_conn()
+
+    # Ensure rack exists
+    rack = conn.execute("SELECT id FROM racks WHERE id=?", (rack_id,)).fetchone()
+    if not rack:
+        conn.close()
+        return jsonify({"error": f"Rack {rack_id} not found"}), 400
+
+    # If no item_id, create a new item
+    if not item_id:
+        cur = conn.execute("INSERT INTO items(label) VALUES(?)", (label,))
+        item_id = cur.lastrowid
+    else:
+        # Validate existing item
+        row = conn.execute("SELECT label FROM items WHERE id=?", (item_id,)).fetchone()
+        if row:
+            label = row["label"]
+        else:
+            conn.close()
+            return jsonify({"error": f"Item {item_id} not found"}), 400
+
+    # Place item into slots
+    for sid in slot_ids:
+        # Validate slot belongs to this rack
+        slot = conn.execute(
+            "SELECT id FROM rack_slots WHERE id=? AND rack_id=?", (sid, rack_id)
+        ).fetchone()
+        if not slot:
+            conn.close()
+            return jsonify({"error": f"Slot {sid} not valid for rack {rack_id}"}), 400
+
+        conn.execute(
+            "INSERT INTO item_slots(item_id, slot_id, item_label, rack_id) VALUES(?,?,?,?)",
+            (item_id, sid, label, rack_id),
+        )
+
+    conn.commit()
+    conn.close()
+
+    return jsonify(
+        {
+            "success": True,
+            "item_id": item_id,
+            "label": label,
+            "slot_ids": slot_ids,
+            "rack_id": rack_id,
+        }
+    )
+
+
+@app.post("/remove")
+def remove_item():
+    item_id = request.json.get("item_id")
+    slot_id = request.json.get("slot_id")
+    conn = get_conn()
+    if slot_id:
+        conn.execute(
+            "DELETE FROM item_slots WHERE item_id=? AND slot_id=?", (item_id, slot_id)
+        )
+    else:
+        conn.execute("DELETE FROM item_slots WHERE item_id=?", (item_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=5000)
+    # Bind to 0.0.0.0 for phone/Pi access on LAN
+    app.run(host="0.0.0.0", port=5000, debug=True)

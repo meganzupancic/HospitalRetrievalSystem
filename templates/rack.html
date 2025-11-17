@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section id="item-details" style="margin-bottom:16px; display:none; border:1px solid #ccc; padding:12px; border-radius:8px;">
+  <h3 id="detail-name"></h3>
+  <p><strong>Location:</strong> <span id="detail-location"></span></p>
+  <p><strong>Tags:</strong> <span id="detail-tags"></span></p>
+  <p><strong>Other Names:</strong> <span id="detail-other-names"></span></p>
+</section>
+
+<section class="rack-grid-wrapper">
+  <!-- Top row -->
+  <div class="rack-top">
+    {% if edit_mode %}
+      {% for s in slots[:10] %}
+        <div class="slot {{ 'occupied' if s.item_id }}"
+             style="background-color: {{ s.color }};"
+             data-slot-id="{{ s.slot_id if s.slot_id else '' }}"
+             data-item-id="{{ s.item_id }}">
+          {% if s.item_id %}
+            <button class="delete-btn">×</button>
+          {% endif %}
+          {{ s.label if s.label else '' }}
+        </div>
+      {% endfor %}
+    {% else %}
+      {% for group in rows[0] %}
+        <div class="slot {{ 'occupied' if group.slot.item_id }}"
+            style="background-color: {{ group.slot.color }}; grid-column: span {{ group.span }};"
+            data-slot-id="{{ group.slot.slot_id if group.slot.slot_id else '' }}"
+            data-item-id="{{ group.slot.item_id }}"
+            data-label="{{ group.slot.label }}"
+            data-location="{{ ', '.join(group.slot.location_numbers) if group.slot.location_numbers else group.slot.slot_id }}"
+            data-tags="{{ ', '.join(group.slot.tags) if group.slot.tags else '' }}"
+            data-other-names="{{ ', '.join(group.slot.other_names) if group.slot.other_names else '' }}">
+          {{ group.slot.label if group.slot.label else '' }}
+        </div>
+      {% endfor %}
+    {% endif %}
+  </div>
+  <div class="rack-bottom">
+    {% if edit_mode %}
+      {% for r in range(1,5) %}
+        <div class="rack-row">
+          {% for s in slots[r*10:(r+1)*10] %}
+            <div class="slot {{ 'occupied' if s.item_id }}"
+                style="background-color: {{ s.color }}; grid-column: span {{ s.span if s.span else 1 }};"
+                data-slot-id="{{ s.slot_id if s.slot_id else '' }}"
+                data-item-id="{{ s.item_id }}">
+              {% if s.item_id %}
+                <button class="delete-btn">×</button>
+              {% endif %}
+              {{ s.label if s.label else '' }}
+            </div>
+          {% endfor %}
+        </div>
+      {% endfor %}
+    {% else %}
+      {% for row in rows[1:] %}
+        <div class="rack-row">
+          {% for group in row %}
+            <div class="slot {{ 'occupied' if group.slot.item_id }}"
+                style="background-color: {{ group.slot.color }}; grid-column: span {{ group.span }};"
+                data-slot-id="{{ group.slot.slot_id if group.slot.slot_id else '' }}"
+                data-item-id="{{ group.slot.item_id }}"
+                data-label="{{ group.slot.label }}"
+                data-location="{{ ', '.join(group.slot.location_numbers) if group.slot.location_numbers else group.slot.slot_id }}"
+                data-tags="{{ ', '.join(group.slot.tags) if group.slot.tags else '' }}"
+                data-other-names="{{ ', '.join(group.slot.other_names) if group.slot.other_names else '' }}">
+              {{ group.slot.label if group.slot.label else '' }}
+            </div>
+          {% endfor %}
+        </div>
+      {% endfor %}
+    {% endif %}
+  </div>
+
+
+</section>
+
+<section class="rack-select-section" style="margin-top:16px;">
+  <span><strong>Select Rack:</strong></span>
+  <button class="rack-btn" data-rack="1">1</button>
+  <button class="rack-btn" data-rack="2">2</button>
+  <button class="rack-btn" data-rack="3">3</button>
+  <button class="rack-btn" data-rack="4">4</button>
+</section>
+
+<section class="add-item-section" style="margin-top:16px;">
+  <button id="add-item-btn">Add New Item</button>
+  <button id="edit-mode-btn">Edit Mode</button>
+  <div id="add-item-form" style="display:none; margin-top:12px;">
+    <input type="text" id="item-name" placeholder="Enter item name" />
+    <button id="save-item-btn">Save Item</button>
+  </div>
+</section>
+
+<script src="{{ url_for('static', filename='rack.js') }}"></script>
+
+{% endblock %}
