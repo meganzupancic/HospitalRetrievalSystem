@@ -23,6 +23,17 @@ def init_db():
         except sqlite3.OperationalError:
             # Column already exists, ignore
             pass
+    
+    # Ensure item_slots has item_tags and item_other_names columns (store snapshot of item metadata per placement)
+    with get_conn() as conn:
+        try:
+            conn.execute("ALTER TABLE item_slots ADD COLUMN item_tags TEXT;")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE item_slots ADD COLUMN item_other_names TEXT;")
+        except sqlite3.OperationalError:
+            pass
 
     # Ensure items table has tags and other_names columns
     with get_conn() as conn:

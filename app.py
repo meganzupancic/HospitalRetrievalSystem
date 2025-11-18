@@ -323,8 +323,8 @@ def place_item():
             return jsonify({"error": f"Slot {sid} not valid for rack {rack_id}"}), 400
 
         conn.execute(
-            "INSERT INTO item_slots(item_id, slot_id, item_label, rack_id) VALUES(?,?,?,?)",
-            (item_id, sid, label, rack_id),
+            "INSERT INTO item_slots(item_id, slot_id, item_label, rack_id, item_tags, item_other_names) VALUES(?,?,?,?,?,?)",
+            (item_id, sid, label, rack_id, tags_csv, other_csv),
         )
 
     conn.commit()

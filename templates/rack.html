@@ -89,24 +89,51 @@
   <button id="add-item-btn">Add New Item</button>
   <button id="edit-mode-btn">Edit Mode</button>
   <div id="add-item-form" style="display:none; margin-top:12px;">
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <div style="display:flex; flex-direction:column; gap:8px; max-width:560px;">
       <input type="text" id="item-name" placeholder="Enter item name" />
-      <input type="text" id="item-tags" placeholder="Tags (comma-separated)" />
-      <input type="text" id="item-other-names" placeholder="Other names (comma-separated)" />
-      <div id="color-picker" style="display:flex; gap:6px; align-items:center;">
-        <span style="font-size:14px;">Color:</span>
-        <div class="color-swatch" data-color="#ffd6e0" style="background:#ffd6e0"></div>
-        <div class="color-swatch" data-color="#ffe7b8" style="background:#ffe7b8"></div>
-        <div class="color-swatch" data-color="#fff4b2" style="background:#fff4b2"></div>
-        <div class="color-swatch" data-color="#dff7d2" style="background:#dff7d2"></div>
-        <div class="color-swatch" data-color="#c8f0f6" style="background:#c8f0f6"></div>
-        <div class="color-swatch" data-color="#d6e4ff" style="background:#d6e4ff"></div>
-        <div class="color-swatch" data-color="#ead4ff" style="background:#ead4ff"></div>
-        <div class="color-swatch" data-color="#f9d9f9" style="background:#f9d9f9"></div>
-        <div class="color-swatch" data-color="#e8f7d9" style="background:#e8f7d9"></div>
-        <div class="color-swatch" data-color="#fdeff2" style="background:#fdeff2"></div>
-      </div>
-      <button id="save-item-btn">Save Item</button>
+        <div>
+          <label style="font-weight:600;">Tags</label>
+          <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <!-- preset tags -->
+            <button type="button" class="preset-tag" data-tag="Code Blue">Code Blue</button>
+            <button type="button" class="preset-tag" data-tag="IV">IV</button>
+            <button type="button" class="preset-tag" data-tag="Sterile">Sterile</button>
+            <button type="button" class="preset-tag" data-tag="Emergency">Emergency</button>
+            <button type="button" class="preset-tag" data-tag="Disposable">Disposable</button>
+            <!-- selected tags appear here -->
+          </div>
+          <div id="selected-tags" style="margin-top:8px;" class="tag-list"></div>
+          <div style="margin-top:6px; display:flex; gap:6px;">
+            <input type="text" id="custom-tag-input" placeholder="Add custom tag and press Enter" />
+            <button id="add-custom-tag" type="button">Add</button>
+          </div>
+        </div>
+
+        <div>
+          <label style="font-weight:600;">Other Names</label>
+          <input type="text" id="item-other-names" placeholder="Comma-separated other names" />
+        </div>
+
+        <div>
+          <label style="font-weight:600;">Color</label>
+          <div id="color-picker" style="display:flex; gap:6px; align-items:center; margin-top:6px;">
+            <div class="color-swatch" data-color="#ffd6e0" style="background:#ffd6e0"></div>
+            <div class="color-swatch" data-color="#ffe7b8" style="background:#ffe7b8"></div>
+            <div class="color-swatch" data-color="#fff4b2" style="background:#fff4b2"></div>
+            <div class="color-swatch" data-color="#dff7d2" style="background:#dff7d2"></div>
+            <div class="color-swatch" data-color="#c8f0f6" style="background:#c8f0f6"></div>
+            <div class="color-swatch" data-color="#d6e4ff" style="background:#d6e4ff"></div>
+            <div class="color-swatch" data-color="#ead4ff" style="background:#ead4ff"></div>
+            <div class="color-swatch" data-color="#f9d9f9" style="background:#f9d9f9"></div>
+            <div class="color-swatch" data-color="#e8f7d9" style="background:#e8f7d9"></div>
+            <div class="color-swatch" data-color="#fdeff2" style="background:#fdeff2"></div>
+          </div>
+        </div>
+
+        <div style="display:flex; gap:8px;">
+          <button id="save-item-btn">Save Item</button>
+          <button id="cancel-add" type="button">Cancel</button>
+        </div>
     </div>
   </div>
 </section>
