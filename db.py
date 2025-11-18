@@ -34,6 +34,10 @@ def init_db():
             conn.execute("ALTER TABLE items ADD COLUMN other_names TEXT;")
         except sqlite3.OperationalError:
             pass
+        try:
+            conn.execute("ALTER TABLE items ADD COLUMN color TEXT;")
+        except sqlite3.OperationalError:
+            pass
 
     # Seed one rack if none exists
     with get_conn() as conn:

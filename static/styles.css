@@ -143,6 +143,23 @@ body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
   font-weight: 700;          /* bold label */
 }
 
+/* Color picker swatches for add-item form */
+.color-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.04) inset;
+}
+.color-swatch.selected {
+  border-color: #333;
+  transform: translateY(-1px);
+}
+.color-swatch:hover {
+  transform: translateY(-1px);
+}
+
 
 .slot {
   border-radius: 6px;

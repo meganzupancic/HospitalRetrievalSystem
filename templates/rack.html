@@ -11,7 +11,8 @@
         <div class="slot edit {{ 'occupied' if s.item_id }}"
              style="background-color: {{ s.color }};"
              data-slot-id="{{ s.slot_id if s.slot_id else '' }}"
-             data-item-id="{{ s.item_id }}">
+             data-item-id="{{ s.item_id }}"
+             data-color="{{ s.color }}">
           {% if s.item_id %}
             <button class="delete-btn">×</button>
           {% endif %}
@@ -24,6 +25,7 @@
             style="background-color: {{ group.slot.color }}; grid-column: span {{ group.span }};"
             data-slot-id="{{ group.slot.slot_id if group.slot.slot_id else '' }}"
             data-item-id="{{ group.slot.item_id }}"
+            data-color="{{ group.slot.color }}"
             data-label="{{ group.slot.label }}"
             data-location="{{ ', '.join(group.slot.location_numbers) if group.slot.location_numbers else group.slot.slot_id }}"
             data-tags="{{ ', '.join(group.slot.tags) if group.slot.tags else '' }}"
@@ -39,9 +41,10 @@
         <div class="rack-row">
           {% for s in slots[r*10:(r+1)*10] %}
             <div class="slot edit {{ 'occupied' if s.item_id }}"
-                style="background-color: {{ s.color }}; grid-column: span {{ s.span if s.span else 1 }};"
-                data-slot-id="{{ s.slot_id if s.slot_id else '' }}"
-                data-item-id="{{ s.item_id }}">
+            style="background-color: {{ s.color }}; grid-column: span {{ s.span if s.span else 1 }};"
+            data-slot-id="{{ s.slot_id if s.slot_id else '' }}"
+            data-item-id="{{ s.item_id }}"
+            data-color="{{ s.color }}">
               {% if s.item_id %}
                 <button class="delete-btn">×</button>
               {% endif %}
@@ -58,6 +61,7 @@
                 style="background-color: {{ group.slot.color }}; grid-column: span {{ group.span }};"
                 data-slot-id="{{ group.slot.slot_id if group.slot.slot_id else '' }}"
                 data-item-id="{{ group.slot.item_id }}"
+                data-color="{{ group.slot.color }}"
                 data-label="{{ group.slot.label }}"
                 data-location="{{ ', '.join(group.slot.location_numbers) if group.slot.location_numbers else group.slot.slot_id }}"
                 data-tags="{{ ', '.join(group.slot.tags) if group.slot.tags else '' }}"
@@ -89,6 +93,19 @@
       <input type="text" id="item-name" placeholder="Enter item name" />
       <input type="text" id="item-tags" placeholder="Tags (comma-separated)" />
       <input type="text" id="item-other-names" placeholder="Other names (comma-separated)" />
+      <div id="color-picker" style="display:flex; gap:6px; align-items:center;">
+        <span style="font-size:14px;">Color:</span>
+        <div class="color-swatch" data-color="#ffd6e0" style="background:#ffd6e0"></div>
+        <div class="color-swatch" data-color="#ffe7b8" style="background:#ffe7b8"></div>
+        <div class="color-swatch" data-color="#fff4b2" style="background:#fff4b2"></div>
+        <div class="color-swatch" data-color="#dff7d2" style="background:#dff7d2"></div>
+        <div class="color-swatch" data-color="#c8f0f6" style="background:#c8f0f6"></div>
+        <div class="color-swatch" data-color="#d6e4ff" style="background:#d6e4ff"></div>
+        <div class="color-swatch" data-color="#ead4ff" style="background:#ead4ff"></div>
+        <div class="color-swatch" data-color="#f9d9f9" style="background:#f9d9f9"></div>
+        <div class="color-swatch" data-color="#e8f7d9" style="background:#e8f7d9"></div>
+        <div class="color-swatch" data-color="#fdeff2" style="background:#fdeff2"></div>
+      </div>
       <button id="save-item-btn">Save Item</button>
     </div>
   </div>

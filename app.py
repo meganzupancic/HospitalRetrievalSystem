@@ -66,7 +66,8 @@ def get_rack(rack_id=1):
             i.id AS item_id,
             i.label,
             i.tags,
-            i.other_names
+            i.other_names,
+            i.color AS item_color
         FROM rack_slots rs
         LEFT JOIN item_slots islots 
             ON islots.slot_id = rs.id AND islots.rack_id = rs.rack_id
@@ -115,7 +116,7 @@ def get_rack(rack_id=1):
         else:
             s["other_names"] = []
 
-    # Build mapping: item_id -> list of slot_ids
+        # Build mapping: item_id -> list of slot_ids
     item_locations = {}
     for s in slots:
         if s["item_id"]:
@@ -127,7 +128,11 @@ def get_rack(rack_id=1):
             s["location_numbers"] = item_locations[s["item_id"]]
         else:
             s["location_numbers"] = [str(s["slot_id"])]
-        s["color"] = color_for_item(s["label"])
+        # Prefer stored item color if present, otherwise fall back to generated pastel
+        if s.get("item_color"):
+            s["color"] = s.get("item_color")
+        else:
+            s["color"] = color_for_item(s["label"])
 
     # Pad to full grid
     slots = pad_slots(slots, cols=rack["cols"], rows=rack["rows"])
@@ -209,6 +214,7 @@ def create_item():
     label = data.get("label")
     tags = data.get("tags")
     other_names = data.get("other_names")
+    color = data.get("color")
     if not label:
         return jsonify({"error": "Label required"}), 400
 
@@ -225,14 +231,20 @@ def create_item():
 
     conn = get_conn()
     cur = conn.execute(
-        "INSERT INTO items(label, tags, other_names) VALUES(?,?,?)",
-        (label, tags_csv, other_csv),
+        "INSERT INTO items(label, tags, other_names, color) VALUES(?,?,?,?)",
+        (label, tags_csv, other_csv, color),
     )
     item_id = cur.lastrowid
     conn.commit()
     conn.close()
     return jsonify(
-        {"item_id": item_id, "label": label, "tags": tags_csv, "other_names": other_csv}
+        {
+            "item_id": item_id,
+            "label": label,
+            "tags": tags_csv,
+            "other_names": other_csv,
+            "color": color,
+        }
     )
 
 
@@ -263,6 +275,7 @@ def place_item():
     # If no item_id, create a new item (include tags/other_names if provided)
     tags = data.get("tags")
     other_names = data.get("other_names")
+    color = data.get("color")
 
     def to_csv(v):
         if v is None:
@@ -276,14 +289,14 @@ def place_item():
 
     if not item_id:
         cur = conn.execute(
-            "INSERT INTO items(label, tags, other_names) VALUES(?,?,?)",
-            (label, tags_csv, other_csv),
+            "INSERT INTO items(label, tags, other_names, color) VALUES(?,?,?,?)",
+            (label, tags_csv, other_csv, color),
         )
         item_id = cur.lastrowid
     else:
         # Validate existing item
         row = conn.execute(
-            "SELECT label, tags, other_names FROM items WHERE id=?", (item_id,)
+            "SELECT label, tags, other_names, color FROM items WHERE id=?", (item_id,)
         ).fetchone()
         if row:
             label = row["label"]
@@ -292,6 +305,9 @@ def place_item():
                 tags_csv = row.get("tags")
             if not other_names and row.get("other_names"):
                 other_csv = row.get("other_names")
+            # preserve existing color if not provided
+            if not color and row.get("color"):
+                color = row.get("color")
         else:
             conn.close()
             return jsonify({"error": f"Item {item_id} not found"}), 400

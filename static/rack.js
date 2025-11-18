@@ -10,6 +10,16 @@ document.addEventListener("DOMContentLoaded", () => {
   let addMode = false;
   let selectedSlots = [];
   let currentRackId = new URLSearchParams(window.location.search).get("rack") || "1";
+  let selectedColor = null;
+  // color swatch click handlers (if swatches exist)
+  const swatches = document.querySelectorAll('.color-swatch');
+  if (swatches.length) {
+    swatches.forEach(s => s.addEventListener('click', () => {
+      swatches.forEach(x => x.classList.remove('selected'));
+      s.classList.add('selected');
+      selectedColor = s.dataset.color;
+    }));
+  }
 
 
   function setAddMode(on) {
@@ -23,6 +33,13 @@ document.addEventListener("DOMContentLoaded", () => {
   addBtn.addEventListener("click", () => {
     setAddMode(true);
     nameInput.focus();
+    // initialize color picker selection (select first swatch if present)
+    const firstSw = document.querySelector('.color-swatch');
+    if (firstSw) {
+      document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+      firstSw.classList.add('selected');
+      selectedColor = firstSw.dataset.color;
+    }
   });
 
   // Click to select slots only in add
@@ -69,7 +86,8 @@ document.addEventListener("DOMContentLoaded", () => {
           rack_id: currentRackId,    // comes from rack buttons or URL
           label: label,              // item name
           tags: tagsArr,
-          other_names: otherArr
+          other_names: otherArr,
+          color: selectedColor
         })
       });
 
@@ -87,6 +105,9 @@ document.addEventListener("DOMContentLoaded", () => {
       nameInput.value = "";
       document.getElementById('item-tags').value = '';
       document.getElementById('item-other-names').value = '';
+      // clear color selection
+      document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+      selectedColor = null;
       window.location.reload();
     } catch (e) {
       console.error(e);
