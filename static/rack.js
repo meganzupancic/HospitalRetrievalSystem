@@ -110,9 +110,16 @@ document.addEventListener("DOMContentLoaded", () => {
   const editBtn = document.getElementById("edit-mode-btn");
 
   editBtn.addEventListener("click", () => {
-    const inEdit = window.location.search.includes("edit=1");
-    // Toggle URL
-    window.location.href = inEdit ? "/" : "/?edit=1";
+    const params = new URLSearchParams(window.location.search);
+    const inEdit = params.get('edit') === '1';
+    // Toggle the edit param but preserve other params (like `rack`)
+    if (inEdit) {
+      params.delete('edit');
+    } else {
+      params.set('edit', '1');
+    }
+    const qs = params.toString();
+    window.location.href = qs ? `/?${qs}` : '/';
   });
 
   // Update button text based on current mode
@@ -149,7 +156,11 @@ document.addEventListener("DOMContentLoaded", () => {
       document.querySelectorAll('.rack-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
 
-      window.location = `/?rack=${rackId}`;
+      // Preserve existing query params (notably `edit`) when switching racks
+      const params = new URLSearchParams(window.location.search);
+      params.set('rack', rackId);
+      const qs = params.toString();
+      window.location = `/?${qs}`;
     });
   });
 
