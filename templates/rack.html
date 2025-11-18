@@ -1,3 +1,5 @@
+<!-- templates/rack.html -->
+
 {% extends "base.html" %}
 {% block content %}
 
@@ -13,7 +15,7 @@
   <div class="rack-top">
     {% if edit_mode %}
       {% for s in slots[:10] %}
-        <div class="slot {{ 'occupied' if s.item_id }}"
+        <div class="slot edit {{ 'occupied' if s.item_id }}"
              style="background-color: {{ s.color }};"
              data-slot-id="{{ s.slot_id if s.slot_id else '' }}"
              data-item-id="{{ s.item_id }}">
@@ -43,7 +45,7 @@
       {% for r in range(1,5) %}
         <div class="rack-row">
           {% for s in slots[r*10:(r+1)*10] %}
-            <div class="slot {{ 'occupied' if s.item_id }}"
+            <div class="slot edit {{ 'occupied' if s.item_id }}"
                 style="background-color: {{ s.color }}; grid-column: span {{ s.span if s.span else 1 }};"
                 data-slot-id="{{ s.slot_id if s.slot_id else '' }}"
                 data-item-id="{{ s.item_id }}">

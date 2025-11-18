@@ -35,15 +35,19 @@ def pad_slots(slots, cols=10, rows=5):
     total = cols * rows
     padded = slots[:]
     while len(padded) < total:
+        # compute 1-based row/col for this new slot so numbering is consistent
+        r = (len(padded) // cols) + 1
+        c = (len(padded) % cols) + 1
         padded.append(
             {
                 "slot_id": None,
                 "item_id": None,
                 "label": "",
-                "color": "#e0e0e0",  # <-- add color here
-                "row": (len(padded) // cols) + 1,
-                "col": (len(padded) % cols) + 1,
-                "location_numbers": [str(len(padded) + 1)],
+                "color": "#e0e0e0",
+                "row": r,
+                "col": c,
+                # location number should reflect position in grid (1..total)
+                "location_numbers": [str((r - 1) * cols + c)],
             }
         )
     return padded
@@ -72,6 +76,20 @@ def get_rack(rack_id=1):
 
     slots = [dict(s) for s in slots]
 
+    # Database stores rack_slots.row/col as 0-based; convert to 1-based
+    # so the grouping and display code (which expects rows 1..N) aligns.
+    for s in slots:
+        if s.get("row") is not None:
+            try:
+                s["row"] = int(s["row"]) + 1
+            except Exception:
+                pass
+        if s.get("col") is not None:
+            try:
+                s["col"] = int(s["col"]) + 1
+            except Exception:
+                pass
+
     # Build mapping: item_id -> list of slot_ids
     item_locations = {}
     for s in slots:
@@ -93,14 +111,12 @@ def get_rack(rack_id=1):
 
 def group_slots(slots, cols=10, rows=5):
     grouped_rows = []
-    # group slots by row number
     slots_by_row = {}
     for s in slots:
         slots_by_row.setdefault(s["row"], []).append(s)
 
-    for r in range(1, rows + 1):  # force all rows
+    for r in range(1, rows + 1):
         row = sorted(slots_by_row.get(r, []), key=lambda x: x["col"])
-        # pad with empty slots if fewer than cols
         while len(row) < cols:
             row.append(
                 {
@@ -110,6 +126,8 @@ def group_slots(slots, cols=10, rows=5):
                     "color": "#e0e0e0",
                     "row": r,
                     "col": len(row) + 1,
+                    "tags": [],
+                    "other_names": [],
                 }
             )
         merged = []
@@ -117,13 +135,24 @@ def group_slots(slots, cols=10, rows=5):
         while c < cols:
             s = row[c]
             span = 1
+            locs = [str(s["col"])]  # or use slot_id if that’s your numbering
             while (
                 c + span < cols
                 and row[c + span]["item_id"] == s["item_id"]
                 and s["item_id"]
             ):
+                locs.append(str(row[c + span]["col"]))
                 span += 1
-            merged.append({"slot": s, "span": span, "color": s["color"]})
+            merged.append(
+                {
+                    "slot": s,
+                    "span": span,
+                    "color": s["color"],
+                    "location_numbers": locs,
+                    "tags": s.get("tags", []),
+                    "other_names": s.get("other_names", []),
+                }
+            )
             c += span
         grouped_rows.append(merged)
     return grouped_rows
