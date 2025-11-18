@@ -3,13 +3,6 @@
 {% extends "base.html" %}
 {% block content %}
 
-<section id="item-details" style="margin-bottom:16px; display:none; border:1px solid #ccc; padding:12px; border-radius:8px;">
-  <h3 id="detail-name"></h3>
-  <p><strong>Location:</strong> <span id="detail-location"></span></p>
-  <p><strong>Tags:</strong> <span id="detail-tags"></span></p>
-  <p><strong>Other Names:</strong> <span id="detail-other-names"></span></p>
-</section>
-
 <section class="rack-grid-wrapper">
   <!-- Top row -->
   <div class="rack-top">
@@ -92,8 +85,12 @@
   <button id="add-item-btn">Add New Item</button>
   <button id="edit-mode-btn">Edit Mode</button>
   <div id="add-item-form" style="display:none; margin-top:12px;">
-    <input type="text" id="item-name" placeholder="Enter item name" />
-    <button id="save-item-btn">Save Item</button>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <input type="text" id="item-name" placeholder="Enter item name" />
+      <input type="text" id="item-tags" placeholder="Tags (comma-separated)" />
+      <input type="text" id="item-other-names" placeholder="Other names (comma-separated)" />
+      <button id="save-item-btn">Save Item</button>
+    </div>
   </div>
 </section>
 

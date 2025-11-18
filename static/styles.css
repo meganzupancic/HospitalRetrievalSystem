@@ -139,14 +139,8 @@ body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
 
 .rack-btn.active {
   background: #2F6B3F;       /* dark green when active */
-  color: #fff;               /* optional: white text for contrast */
-}
-
-/* Make selected rack label bold and give a black outline */
-.rack-btn.active {
-  font-weight: 700;
-  outline: 2px solid #000;
-  outline-offset: 0;
+  color: #fff;               /* white text for contrast */
+  font-weight: 700;          /* bold label */
 }
 
 

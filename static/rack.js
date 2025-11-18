@@ -17,8 +17,6 @@ document.addEventListener("DOMContentLoaded", () => {
     selectedSlots = [];
     slots.forEach(s => s.classList.remove("selected"));
     form.style.display = on ? "block" : "none";
-    // Light red background only while selecting
-    rackBottom.style.backgroundColor = on ? "#f8d7da" : "";
   }
 
   // Enter selection mode
@@ -47,6 +45,12 @@ document.addEventListener("DOMContentLoaded", () => {
   // Save item: create item, then place into selected slots
   saveBtn.addEventListener("click", async () => {
     const label = nameInput.value.trim();
+    const tagsRaw = document.getElementById('item-tags').value || '';
+    const otherRaw = document.getElementById('item-other-names').value || '';
+
+    // convert comma-separated inputs into arrays (trimmed)
+    const tagsArr = tagsRaw.split(',').map(s => s.trim()).filter(Boolean);
+    const otherArr = otherRaw.split(',').map(s => s.trim()).filter(Boolean);
     if (!label) {
       alert("Please enter an item name.");
       return;
@@ -63,7 +67,9 @@ document.addEventListener("DOMContentLoaded", () => {
         body: JSON.stringify({
           slot_ids: selectedSlots,   // use selectedSlots
           rack_id: currentRackId,    // comes from rack buttons or URL
-          label: label               // item name
+          label: label,              // item name
+          tags: tagsArr,
+          other_names: otherArr
         })
       });
 
@@ -79,6 +85,8 @@ document.addEventListener("DOMContentLoaded", () => {
       alert("Item added and placed.");
       setAddMode(false);
       nameInput.value = "";
+      document.getElementById('item-tags').value = '';
+      document.getElementById('item-other-names').value = '';
       window.location.reload();
     } catch (e) {
       console.error(e);
@@ -139,11 +147,24 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".rack-bottom .slot, .rack-top .slot").forEach(slot => {
     slot.addEventListener("click", () => {
       if (!slot.classList.contains("occupied")) return; // ignore empty slots
-
       itemNameValue.textContent = slot.dataset.label || "Unnamed Item";
       locationValue.textContent = slot.dataset.location || "N/A";   // ← location numbers
       tagsValue.textContent = slot.dataset.tags || "None";
       otherNamesValue.textContent = slot.dataset.otherNames || "None";
+
+      // also populate the detail panel (if present) and show it
+      const detailPanel = document.getElementById('item-details');
+      const detailName = document.getElementById('detail-name');
+      const detailLocation = document.getElementById('detail-location');
+      const detailTags = document.getElementById('detail-tags');
+      const detailOther = document.getElementById('detail-other-names');
+      if (detailPanel && detailName) {
+        detailName.textContent = slot.dataset.label || "Unnamed Item";
+        detailLocation.textContent = slot.dataset.location || "N/A";
+        detailTags.textContent = slot.dataset.tags || "None";
+        detailOther.textContent = slot.dataset.otherNames || "None";
+        detailPanel.style.display = 'block';
+      }
     });
   });
 });

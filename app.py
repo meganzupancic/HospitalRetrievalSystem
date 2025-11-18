@@ -48,6 +48,8 @@ def pad_slots(slots, cols=10, rows=5):
                 "col": c,
                 # location number should reflect position in grid (1..total)
                 "location_numbers": [str((r - 1) * cols + c)],
+                "tags": [],
+                "other_names": [],
             }
         )
     return padded
@@ -62,7 +64,9 @@ def get_rack(rack_id=1):
             rs.row,
             rs.col,
             i.id AS item_id,
-            i.label
+            i.label,
+            i.tags,
+            i.other_names
         FROM rack_slots rs
         LEFT JOIN item_slots islots 
             ON islots.slot_id = rs.id AND islots.rack_id = rs.rack_id
@@ -89,6 +93,27 @@ def get_rack(rack_id=1):
                 s["col"] = int(s["col"]) + 1
             except Exception:
                 pass
+
+        # convert tags/other_names (stored as comma-separated text) to lists for template usage
+        tags_val = s.get("tags")
+        if tags_val:
+            try:
+                s["tags"] = [t.strip() for t in str(tags_val).split(",") if t.strip()]
+            except Exception:
+                s["tags"] = []
+        else:
+            s["tags"] = []
+
+        other_val = s.get("other_names")
+        if other_val:
+            try:
+                s["other_names"] = [
+                    t.strip() for t in str(other_val).split(",") if t.strip()
+                ]
+            except Exception:
+                s["other_names"] = []
+        else:
+            s["other_names"] = []
 
     # Build mapping: item_id -> list of slot_ids
     item_locations = {}
@@ -180,15 +205,35 @@ def rack_view():
 
 @app.post("/items")
 def create_item():
-    label = request.json.get("label")
+    data = request.json or {}
+    label = data.get("label")
+    tags = data.get("tags")
+    other_names = data.get("other_names")
     if not label:
         return jsonify({"error": "Label required"}), 400
+
+    # Normalize tags/other_names into comma-separated strings
+    def to_csv(v):
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return ",".join([str(x).strip() for x in v if str(x).strip()])
+        return str(v)
+
+    tags_csv = to_csv(tags)
+    other_csv = to_csv(other_names)
+
     conn = get_conn()
-    cur = conn.execute("INSERT INTO items(label) VALUES(?)", (label,))
+    cur = conn.execute(
+        "INSERT INTO items(label, tags, other_names) VALUES(?,?,?)",
+        (label, tags_csv, other_csv),
+    )
     item_id = cur.lastrowid
     conn.commit()
     conn.close()
-    return jsonify({"item_id": item_id, "label": label})
+    return jsonify(
+        {"item_id": item_id, "label": label, "tags": tags_csv, "other_names": other_csv}
+    )
 
 
 @app.post("/place")
@@ -215,15 +260,38 @@ def place_item():
         conn.close()
         return jsonify({"error": f"Rack {rack_id} not found"}), 400
 
-    # If no item_id, create a new item
+    # If no item_id, create a new item (include tags/other_names if provided)
+    tags = data.get("tags")
+    other_names = data.get("other_names")
+
+    def to_csv(v):
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return ",".join([str(x).strip() for x in v if str(x).strip()])
+        return str(v)
+
+    tags_csv = to_csv(tags)
+    other_csv = to_csv(other_names)
+
     if not item_id:
-        cur = conn.execute("INSERT INTO items(label) VALUES(?)", (label,))
+        cur = conn.execute(
+            "INSERT INTO items(label, tags, other_names) VALUES(?,?,?)",
+            (label, tags_csv, other_csv),
+        )
         item_id = cur.lastrowid
     else:
         # Validate existing item
-        row = conn.execute("SELECT label FROM items WHERE id=?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT label, tags, other_names FROM items WHERE id=?", (item_id,)
+        ).fetchone()
         if row:
             label = row["label"]
+            # if tags/other_names not passed in request, use values from DB
+            if not tags and row.get("tags"):
+                tags_csv = row.get("tags")
+            if not other_names and row.get("other_names"):
+                other_csv = row.get("other_names")
         else:
             conn.close()
             return jsonify({"error": f"Item {item_id} not found"}), 400
