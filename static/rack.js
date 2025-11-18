@@ -144,12 +144,21 @@ document.addEventListener("DOMContentLoaded", () => {
 document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll('.rack-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      currentRackId = btn.dataset.rack;
+      const rackId = btn.dataset.rack;
 
       document.querySelectorAll('.rack-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
 
-      window.location = `/?rack=${currentRackId}`;
+      window.location = `/?rack=${rackId}`;
     });
   });
+
+  // Highlight the current rack button on page load based on the URL param
+  const params = new URLSearchParams(window.location.search);
+  const initial = params.get('rack') || '1';
+  const sel = document.querySelector(`.rack-btn[data-rack="${initial}"]`);
+  if (sel) {
+    document.querySelectorAll('.rack-btn').forEach(b => b.classList.remove('active'));
+    sel.classList.add('active');
+  }
 });
