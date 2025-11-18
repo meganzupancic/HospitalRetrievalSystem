@@ -80,9 +80,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       // restore selected slots only if those slot IDs exist on this page
       selectedSlots = Array.isArray(d.selectedSlots) ? d.selectedSlots.filter(id => slots.some(s => s.dataset.slotId === id)) : [];
-      slots.forEach(s => s.classList.toggle('selected', selectedSlots.includes(s.dataset.slotId)));
-      // open add mode to reveal restored fields
-      setAddMode(true);
+      // Do NOT toggle slot DOM selection here. We restore the draft silently so
+      // the Add form does not automatically open when changing racks. The user
+      // must click Add to enter add mode and see selections.
       return true;
     } catch (e) {
       console.warn('Could not load draft', e);

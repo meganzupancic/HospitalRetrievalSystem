@@ -23,7 +23,7 @@ def init_db():
         except sqlite3.OperationalError:
             # Column already exists, ignore
             pass
-    
+
     # Ensure item_slots has item_tags and item_other_names columns (store snapshot of item metadata per placement)
     with get_conn() as conn:
         try:
