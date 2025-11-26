@@ -46,6 +46,20 @@ def wake_word_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_ac
                     text = result.get("text", "")
                     if WAKE_WORD in text.lower():
                         print(f"Wake word '{WAKE_WORD}' detected.")
+                        # Send 'start' to PC to indicate wake-word activity
+                        try:
+                            import socket
+
+                            HOST = "172.20.10.3"
+                            PORT = 5050
+                            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                                s.settimeout(1)
+                                s.connect((HOST, PORT))
+                                s.sendall(b"start")
+                            print(f"Sent 'start' to {HOST}:{PORT}")
+                        except Exception as e:
+                            print(f"Error sending start message on wake word: {e}")
+
                         voice_trigger.set()
                         wake_stream_active.clear()
     except Exception as e:

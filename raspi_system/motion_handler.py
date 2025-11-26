@@ -22,6 +22,19 @@ def motion_callback(channel):
         # This will trigger the voice thread just like wake word
         motion_callback.voice_trigger.set()
         motion_callback.wake_stream_active.clear()
+        # Send a "start" message to the PC to indicate activity
+        try:
+            import socket
+
+            HOST = "172.20.10.3"
+            PORT = 5050
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                s.connect((HOST, PORT))
+                s.sendall(b"start")
+            print(f"Sent 'start' to {HOST}:{PORT}")
+        except Exception as e:
+            print(f"Error sending start message on motion: {e}")
 
 
 def motion_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_active):

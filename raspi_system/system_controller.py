@@ -23,6 +23,7 @@ import time
 
 # from tkinter import scrolledtext
 import pyttsx3
+from raspi_to_arduino.send_slots import send_slot_string
 
 # from bleak import BleakClient
 # DEVICE_ADDRESS = "C6:10:17:BD:9F:7F"  # your Nordic_LBS MAC
@@ -102,13 +103,43 @@ def voice_thread():
                             matches = []
 
                         if matches:
-                            print(f"Item '{keyword}' found in multiple locations:")
+                            # Aggregate locations by rack for clearer output
+                            racks = {}
                             for m in matches:
-                                location_text = f"  • Rack #{m.get('rack')} Location {m.get('location')}"
-                                print(location_text)
+                                rack = m.get("rack")
+                                loc = m.get("location")
+                                racks.setdefault(rack, []).append(loc)
+
+                            print(f"Found item: '{keyword}'")
+                            for rack, locs in sorted(racks.items()):
+                                locs_sorted = sorted(locs)
+                                locs_str = ", ".join(str(loc) for loc in locs_sorted)
+                                print(f"  • Rack #{rack} locations: {locs_str}")
+
+                            # Send slot occupancy string for all matched locations (once)
+                            try:
+                                all_locs = []
+                                for locs in racks.values():
+                                    all_locs.extend(locs)
+                                # de-duplicate and send
+                                unique_locs = sorted({int(x) for x in all_locs if x})
+                                if unique_locs:
+                                    send_slot_string(unique_locs)
+                            except Exception as e:
+                                print(f"Error preparing/sending slot string: {e}")
                         else:
-                            print(f'Item found: "{keyword}"')
-                            location_text = f"  • Rack #{result.get('rack')} Location {result.get('location')}"
+                            # Single result from NLP; print the reported rack/location
+                            print(f"Found item: '{keyword}'")
+                            print(
+                                f"  • Rack #{result.get('rack')} Location {result.get('location')}"
+                            )
+                            # Send slot occupancy string for the single reported location
+                            try:
+                                loc = int(result.get("location", 0))
+                                if loc > 0:
+                                    send_slot_string([loc])
+                            except Exception as e:
+                                print(f"Error sending single-location slot string: {e}")
                         # socketio.emit("highlight_keyword", {"keyword": keyword})
 
                         # Trigger LED light on Nordic board

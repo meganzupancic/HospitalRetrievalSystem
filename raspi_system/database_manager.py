@@ -1,7 +1,7 @@
 import os
 import sqlite3
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "medical_supplies.db")
+DB_PATH = os.path.join(os.path.dirname(__file__), "database/medical_supplies.db")
 # print("Database path:", DB_PATH)
 
 
@@ -9,29 +9,33 @@ def init_db():
     """Initialize the database with a unique ID and support for duplicate items at different locations."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
+
     # Create current_items table if it doesn't exist
-    cursor.execute("""
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS current_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             item TEXT NOT NULL UNIQUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-    """)
-    
+    """
+    )
+
     # First check if we need to migrate the old table
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='medical_supplies'")
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='medical_supplies'"
+    )
     old_table_exists = cursor.fetchone() is not None
-    
+
     if old_table_exists:
         # Backup existing data
         cursor.execute("SELECT item, rack, location, isCalled FROM medical_supplies")
         old_data = cursor.fetchall()
-        
+
         # Drop old table
         cursor.execute("DROP TABLE medical_supplies")
         print("Backed up old data and dropped old table")
-    
+
     # Create new table with correct schema
     print("Creating medical_supplies table with new schema...")
     cursor.execute(
@@ -46,7 +50,7 @@ def init_db():
         );
         """
     )
-    
+
     # Create index for item lookups
     cursor.execute(
         """
@@ -54,7 +58,7 @@ def init_db():
         ON medical_supplies(item);
         """
     )
-    
+
     # Restore old data if we had any
     if old_table_exists and old_data:
         print("Restoring existing items...")
@@ -63,9 +67,9 @@ def init_db():
             INSERT INTO medical_supplies (item, rack, location, isCalled)
             VALUES (?, ?, ?, ?)
             """,
-            old_data
+            old_data,
         )
-    
+
     conn.commit()
     conn.close()
 
@@ -82,15 +86,17 @@ def load_database_from_sqlite():
     except Exception:
         # If table doesn't exist yet or other issue, ignore
         pass
-    
+
     try:
         # Get all fields including id and created_at, order by newest first
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT id, item, rack, location, isCalled 
             FROM medical_supplies 
             WHERE rack > 0 OR location > 0
             ORDER BY created_at DESC, id DESC
-        """)
+        """
+        )
         rows = cursor.fetchall()
         result = [
             {
@@ -98,14 +104,14 @@ def load_database_from_sqlite():
                 "item": row[1],
                 "rack": row[2],
                 "location": row[3],
-                "isCalled": bool(row[4])
+                "isCalled": bool(row[4]),
             }
             for row in rows
         ]
     except Exception as e:
         print(f"Error loading database: {e}")
         result = []  # Return empty list on error
-    
+
     conn.close()
     return result
 
@@ -200,20 +206,20 @@ def update_item_location(item_name, new_rack, new_location):
 
 def mark_item_as_most_recent(item_name):
     """Set isCalled = 1 for all entries matching item_name and set isCalled = 0 for all others.
-    If item does not exist, creates a temporary entry that will be replaced when placed."""
+    If item does not exist, creates a temporary entry that will be replaced when placed.
+    """
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     try:
         # First reset all items to not called
         cursor.execute("UPDATE medical_supplies SET isCalled = 0")
-        
+
         # Then set all matching items to called
         cursor.execute(
-            "UPDATE medical_supplies SET isCalled = 1 WHERE item = ?",
-            (item_name,)
+            "UPDATE medical_supplies SET isCalled = 1 WHERE item = ?", (item_name,)
         )
-        
+
         # If no rows were updated, insert a temporary entry
         if cursor.rowcount == 0:
             cursor.execute(
@@ -222,9 +228,9 @@ def mark_item_as_most_recent(item_name):
                 (item, rack, location, isCalled) 
                 VALUES (?, 0, 0, 1)
                 """,
-                (item_name,)
+                (item_name,),
             )
-        
+
         conn.commit()
     except Exception as e:
         print(f"Error marking items as called: {e}")
@@ -237,29 +243,41 @@ def get_item(item_name):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT item, rack, location, isCalled FROM medical_supplies WHERE item = ?", (item_name,))
+        cursor.execute(
+            "SELECT item, rack, location, isCalled FROM medical_supplies WHERE item = ?",
+            (item_name,),
+        )
         row = cursor.fetchone()
         if not row:
             return None
-        return {"item": row[0], "rack": row[1], "location": row[2], "isCalled": bool(row[3])}
+        return {
+            "item": row[0],
+            "rack": row[1],
+            "location": row[2],
+            "isCalled": bool(row[3]),
+        }
     except Exception as e:
         print(f"Error getting item: {e}")
         return None
     finally:
         conn.close()
 
+
 def add_current_item(item_name):
     """Add an item to the current items list."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT OR REPLACE INTO current_items (item) VALUES (?)", (item_name,))
+        cursor.execute(
+            "INSERT OR REPLACE INTO current_items (item) VALUES (?)", (item_name,)
+        )
         conn.commit()
     except Exception as e:
         print(f"Error adding current item: {e}")
         conn.rollback()
     finally:
         conn.close()
+
 
 def get_current_items():
     """Get all items in the current items list."""
@@ -274,6 +292,7 @@ def get_current_items():
         return []
     finally:
         conn.close()
+
 
 def delete_current_item(item_name):
     """Delete an item from the current items list."""
