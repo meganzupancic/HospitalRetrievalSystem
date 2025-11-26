@@ -23,13 +23,10 @@ import time
 
 # from tkinter import scrolledtext
 import pyttsx3
-import asyncio
-import time
-from bleak import BleakClient
 
-DEVICE_ADDRESS = "C6:10:17:BD:9F:7F"  # your Nordic_LBS MAC
-LBS_LED_CHAR_UUID = "00001525-1212-efde-1523-785feabcd123"
-
+# from bleak import BleakClient
+# DEVICE_ADDRESS = "C6:10:17:BD:9F:7F"  # your Nordic_LBS MAC
+# LBS_LED_CHAR_UUID = "00001525-1212-efde-1523-785feabcd123"
 # from app import socketio
 from raspi_system.database_manager import load_database_from_sqlite
 from raspi_system.motion_handler import motion_listener
@@ -49,23 +46,23 @@ wake_stream_active = threading.Event()
 wake_stream_active.set()
 
 
-async def light_led_for_seconds(seconds=5):
-    client = BleakClient(DEVICE_ADDRESS)
-    try:
-        await client.connect()
-        print("Connected to Nordic board.")
-        # Turn LED ON
-        await client.write_gatt_char(LBS_LED_CHAR_UUID, bytearray([0x01]), response=True)
-        print("LED ON")
-        await asyncio.sleep(seconds)
-        # Turn LED OFF
-        await client.write_gatt_char(LBS_LED_CHAR_UUID, bytearray([0x00]), response=True)
-        print("LED OFF")
-    finally:
-        try:
-            await client.disconnect()
-        except Exception:
-            pass
+# async def light_led_for_seconds(seconds=5):
+#     client = BleakClient(DEVICE_ADDRESS)
+#     try:
+#         await client.connect()
+#         print("Connected to Nordic board.")
+#         # Turn LED ON
+#         await client.write_gatt_char(LBS_LED_CHAR_UUID, bytearray([0x01]), response=True)
+#         print("LED ON")
+#         await asyncio.sleep(seconds)
+#         # Turn LED OFF
+#         await client.write_gatt_char(LBS_LED_CHAR_UUID, bytearray([0x00]), response=True)
+#         print("LED OFF")
+#     finally:
+#         try:
+#             await client.disconnect()
+#         except Exception:
+#             pass
 
 
 def voice_thread():
@@ -115,7 +112,7 @@ def voice_thread():
                         # socketio.emit("highlight_keyword", {"keyword": keyword})
 
                         # Trigger LED light on Nordic board
-                        asyncio.run(light_led_for_seconds(5))
+                        # asyncio.run(light_led_for_seconds(5))
 
                         if "thank you" in phrase.lower():
                             response = "You're welcome!"
