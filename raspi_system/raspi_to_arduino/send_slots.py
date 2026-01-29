@@ -3,7 +3,7 @@ import socket
 from typing import Iterable, List
 
 # Default destination for the PC receiving slot strings. Override with env vars if needed.
-HOST = os.environ.get("SLOT_HOST", "172.20.10.3")
+HOST = os.environ.get("SLOT_HOST", "172.20.10.6")
 PORT = int(os.environ.get("SLOT_PORT", "5050"))
 
 

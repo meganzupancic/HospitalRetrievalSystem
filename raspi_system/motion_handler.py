@@ -26,7 +26,7 @@ def motion_callback(channel):
         try:
             import socket
 
-            HOST = "172.20.10.3"
+            HOST = "172.20.10.6"
             PORT = 5050
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(1)

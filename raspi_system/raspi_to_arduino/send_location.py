@@ -1,6 +1,6 @@
 import socket
 
-HOST = "172.20.10.3"  # IP of the computer
+HOST = "172.20.10.6"  # IP of the computer
 PORT = 5050  # Port to send data
 
 num = input("Enter a number (1-24): ")

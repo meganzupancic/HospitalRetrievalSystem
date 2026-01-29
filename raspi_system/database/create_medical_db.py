@@ -27,30 +27,29 @@ def main():
         """
     )
 
-    # Base single-slot items (item, rack, location)
-    items = [
-        ("Bandage", 1, 1),
-        ("Syringe", 1, 2),
-        ("Gauze", 1, 3),
-        ("IV Kit", 1, 4),
-        ("Adhesive Tape", 1, 5),
-    ]
+    # Insert items exactly as requested by the user.
+    # Requested mapping:
+    # - Thermometer: locations 1,2
+    # - Needles: location 3
+    # - Hand Sanitizer: locations 4,5,6
+    # - Adhesive Tape: locations 7,8,9,10
+    # - Syringe: locations 11,12
 
-    # Insert base items
+    items = []
+    # Thermometer (1,2)
+    items += [("Thermometer", 1, s) for s in (1, 2)]
+    # Needles (3)
+    items += [("Needles", 1, 3)]
+    # Hand Sanitizer (4,5,6)
+    items += [("Hand Sanitizer", 1, s) for s in (4, 5, 6)]
+    # Adhesive Tape (7,8,9,10)
+    items += [("Adhesive Tape", 1, s) for s in (7, 8, 9, 10)]
+    # Syringe (11,12)
+    items += [("Syringe", 1, s) for s in (11, 12)]
+
     cur.executemany(
         "INSERT INTO medical_supplies (item, rack, location) VALUES (?,?,?)",
         items,
-    )
-
-    # Add multi-slot items by inserting one row per occupied slot.
-    # Gloves will occupy slots 6-8 (3 slots)
-    gloves_slots = [("Gloves", 1, s) for s in range(6, 9)]
-    # Thermometer will occupy slots 9-10 (2 slots)
-    thermometer_slots = [("Thermometer", 1, s) for s in range(9, 11)]
-
-    cur.executemany(
-        "INSERT INTO medical_supplies (item, rack, location) VALUES (?,?,?)",
-        gloves_slots + thermometer_slots,
     )
 
     conn.commit()
