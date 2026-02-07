@@ -10,6 +10,7 @@
 
 # system_controler.py
 # import socket
+import asyncio
 import os
 import sys
 
@@ -23,6 +24,7 @@ import time
 
 # from tkinter import scrolledtext
 import pyttsx3
+from bleak import BleakClient, BleakScanner
 from raspi_to_arduino.send_slots import send_slot_string
 
 # from bleak import BleakClient
@@ -45,6 +47,124 @@ pause_event = threading.Event()
 shutdown_flag = threading.Event()
 wake_stream_active = threading.Event()
 wake_stream_active.set()
+
+
+SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
+CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1"
+ARDUINO_ADDRESS = "8D:3E:F7:D1:4E:34"
+
+
+class BLEManager:
+    def __init__(self, char_uuid=CHAR_UUID):
+        self.char_uuid = char_uuid
+        self.loop = None
+        self.thread = None
+        self.client = None
+        self.connected_event = threading.Event()
+        self._lock = asyncio.Lock()  # prevents overlapping writes
+
+    def start(self):
+        self.loop = asyncio.new_event_loop()
+
+        def _run_loop():
+            asyncio.set_event_loop(self.loop)
+            self.loop.run_forever()
+
+        self.thread = threading.Thread(target=_run_loop, daemon=True)
+        self.thread.start()
+
+        # Start the persistent connection loop
+        asyncio.run_coroutine_threadsafe(self._connection_loop(), self.loop)
+
+    async def _connection_loop(self):
+        """Persistent connection manager that reconnects safely."""
+        while True:
+            try:
+                if not self.client or not self.client.is_connected:
+                    print(f"BLEManager: attempting connection to {ARDUINO_ADDRESS}")
+                    self.client = BleakClient(ARDUINO_ADDRESS)
+
+                    try:
+                        await self.client.connect()
+                        print("BLEManager: Connected to Arduino")
+                        self.connected_event.set()
+
+                        # Allow BlueZ to stabilize
+                        await asyncio.sleep(0.5)
+
+                    except Exception as e:
+                        print(f"BLEManager: connection failed: {e}")
+                        await asyncio.sleep(2)
+                        continue
+
+                # Stay connected until it drops
+                while self.client.is_connected:
+                    await asyncio.sleep(0.5)
+
+                print("BLEManager: connection lost, retrying...")
+                self.connected_event.clear()
+
+            except Exception as e:
+                print(f"BLEManager: connection loop error: {e}")
+
+            await asyncio.sleep(1)
+
+    def send_signal(self, data: bytes = b"1"):
+        """Thread-safe write entry point."""
+        if not self.loop:
+            print("BLEManager: loop not started")
+            return
+
+        fut = asyncio.run_coroutine_threadsafe(self._write(data), self.loop)
+        try:
+            fut.result(timeout=5)
+        except Exception as e:
+            print(f"BLEManager: write timeout/error: {e}")
+
+    async def _write(self, data: bytes):
+        """Safe BLE write that never races with reconnect."""
+        async with self._lock:
+            try:
+                if not self.client or not self.client.is_connected:
+                    print("BLEManager: not connected, cannot write")
+                    return
+
+                await self.client.write_gatt_char(self.char_uuid, data, response=False)
+                print("BLEManager: signal sent")
+
+            except Exception as e:
+                print(f"BLEManager write failed: {e}")
+
+
+# Create and start the BLE manager AFTER class definition
+ble_manager = BLEManager()
+ble_manager.start()
+
+
+async def send_alert():
+    print("Scanning for Arduino...")
+    devices = await BleakScanner.discover()
+    for d in devices:
+        print(d)
+
+    target = None
+    for d in devices:
+        if "Nano33BLE" in d.name:
+            target = d
+            break
+
+    if not target:
+        print("Arduino not found")
+        return
+
+    async with BleakClient(target.address) as client:
+        print("Connected. Sending alert...")
+        await client.write_gatt_char(CHAR_UUID, b"1")
+        print("Alert sent")
+
+
+# Call this when keyword is found:
+# asyncio.run(send_alert())
 
 
 # async def light_led_for_seconds(seconds=5):
@@ -81,11 +201,16 @@ def voice_thread():
 
             try:
                 for phrase in listen_and_transcribe(shutdown_flag):
+
+                    if phrase is None or not isinstance(phrase, str):
+                        continue
+
                     if shutdown_flag.is_set():
                         break
 
                     db = load_database_from_sqlite()
-                    # print(f"Heard: {phrase}")
+
+                    print(f"Heard: {phrase}")
                     result = find_keyword(phrase, db)
                     print(f"Keyword match result: {result}")
 
@@ -126,7 +251,8 @@ def voice_thread():
                                 if unique_locs:
                                     send_slot_string(unique_locs)
                             except Exception as e:
-                                print(f"Error preparing/sending slot string: {e}")
+                                print(f"Error sending multi-location slot string: {e}")
+
                         else:
                             # Single result from NLP; print the reported rack/location
                             print(f"Found item: '{keyword}'")
@@ -145,9 +271,12 @@ def voice_thread():
                         # Trigger LED light on Nordic board
                         # asyncio.run(light_led_for_seconds(5))
 
-                        if "thank you" in phrase.lower():
-                            response = "You're welcome!"
-                            print(response)
+                        # Send BLE signal to Arduino when keyword is found
+                        try:
+                            ble_manager.send_signal()
+
+                        except Exception as e:
+                            print(f"Error sending BLE alert: {e}")
 
             except GeneratorExit:
                 break
@@ -161,6 +290,13 @@ def voice_thread():
 
 def run_system():
     # ui = SystemUI()
+    # Start BLE manager so Arduino is connected once at startup
+    global ble_manager
+    ble_manager = BLEManager()
+    try:
+        ble_manager.start()
+    except Exception as e:
+        print(f"Failed to start BLE manager: {e}")
     t1 = threading.Thread(target=voice_thread, args=(), daemon=True)
     t2 = threading.Thread(
         target=motion_listener,
