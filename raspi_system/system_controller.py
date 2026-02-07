@@ -12,6 +12,7 @@
 # import socket
 import asyncio
 import os
+import queue
 import sys
 
 # Add the parent directory to sys.path
@@ -25,7 +26,6 @@ import time
 # from tkinter import scrolledtext
 import pyttsx3
 from bleak import BleakClient, BleakScanner
-from raspi_to_arduino.send_slots import send_slot_string
 
 # from bleak import BleakClient
 # DEVICE_ADDRESS = "C6:10:17:BD:9F:7F"  # your Nordic_LBS MAC
@@ -47,11 +47,14 @@ pause_event = threading.Event()
 shutdown_flag = threading.Event()
 wake_stream_active = threading.Event()
 wake_stream_active.set()
+ble_event_queue = queue.Queue()
+ble_event_ready = threading.Event()  # Signals when queue has items
 
 
 SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
 CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1"
 ARDUINO_ADDRESS = "8D:3E:F7:D1:4E:34"
+ARDUINO_NAME = "Nano33BLE-Light"
 
 
 class BLEManager:
@@ -136,11 +139,6 @@ class BLEManager:
                 print(f"BLEManager write failed: {e}")
 
 
-# Create and start the BLE manager AFTER class definition
-ble_manager = BLEManager()
-ble_manager.start()
-
-
 async def send_alert():
     print("Scanning for Arduino...")
     devices = await BleakScanner.discover()
@@ -165,6 +163,142 @@ async def send_alert():
 
 # Call this when keyword is found:
 # asyncio.run(send_alert())
+
+
+def ble_worker_thread():
+    """BLE Worker thread that connects to Nano 33 BLE and processes keyword events."""
+    print("BLE Worker: Starting...")
+
+    async def find_and_connect():
+        """Scan for Arduino by name and connect."""
+        print(f"BLE Worker: Scanning for '{ARDUINO_NAME}'...")
+        try:
+            devices = await BleakScanner.discover(timeout=10.0)
+            target = None
+
+            # First try to find by name
+            for device in devices:
+                if device.name and ARDUINO_NAME in device.name:
+                    target = device
+                    print(f"BLE Worker: Found Arduino by name at {device.address}")
+                    break
+
+            # Fallback: try to find by known address
+            if not target:
+                print(f"BLE Worker: Name not found, trying address {ARDUINO_ADDRESS}")
+                for device in devices:
+                    if device.address == ARDUINO_ADDRESS:
+                        target = device
+                        print("BLE Worker: Found Arduino by address")
+                        break
+
+            if not target:
+                print(
+                    f"BLE Worker: Arduino not found in scan (scanned {len(devices)} devices)"
+                )
+                return None
+
+            # Small delay to let BlueZ stabilize after scan
+            await asyncio.sleep(0.5)
+
+            # Use the device object directly for better connection reliability
+            client = BleakClient(target)
+            await client.connect(timeout=15.0)
+            print(f"BLE Worker: ✅ Connected to {target.name or target.address}")
+
+            # Allow connection to fully stabilize
+            await asyncio.sleep(1.0)
+            return client
+
+        except Exception as e:
+            print(f"BLE Worker: Connection error: {e}")
+            return None
+
+    async def process_events(client):
+        """Process events from queue and write to Arduino."""
+        loop = asyncio.get_event_loop()
+
+        while not shutdown_flag.is_set():
+            try:
+                # Check if still connected
+                if not client.is_connected:
+                    print("BLE Worker: ❌ Connection lost")
+                    return False
+
+                # Wait efficiently for queue items using threading.Event
+                await loop.run_in_executor(
+                    None, lambda: ble_event_ready.wait(timeout=0.1)
+                )
+
+                # Process all queued events
+                while not ble_event_queue.empty():
+                    try:
+                        event = ble_event_queue.get_nowait()
+                        ble_event_queue.task_done()
+
+                        recv_time = time.time()
+                        queue_latency = recv_time - event.get("queued_at", recv_time)
+                        print(
+                            f"BLE Worker: ⚡ Event received (queue latency: {queue_latency*1000:.1f}ms)"
+                        )
+
+                        # Process the event - write to Arduino
+                        try:
+                            write_start = time.time()
+                            # Write "1" to trigger LED - fire and forget for minimum latency
+                            await client.write_gatt_char(
+                                CHAR_UUID, b"1", response=False
+                            )
+                            write_time = (time.time() - write_start) * 1000
+                            print(
+                                f"BLE Worker: ✅ Signal sent (write took {write_time:.1f}ms)"
+                            )
+                        except Exception as e:
+                            print(f"BLE Worker: Write failed: {e}")
+                            return False
+                    except queue.Empty:
+                        break
+
+                # Clear the event after processing
+                ble_event_ready.clear()
+
+            except Exception as e:
+                print(f"BLE Worker: Event processing error: {e}")
+                return False
+
+        return True
+
+    async def run_ble_worker():
+        """Main BLE worker loop with reconnection."""
+        while not shutdown_flag.is_set():
+            client = await find_and_connect()
+
+            if client:
+                # Stay connected and process events
+                try:
+                    await process_events(client)
+                except Exception as e:
+                    print(f"BLE Worker: Event loop error: {e}")
+                finally:
+                    try:
+                        if client.is_connected:
+                            await client.disconnect()
+                            print("BLE Worker: Disconnected")
+                    except:
+                        pass
+
+            # Wait before reconnecting
+            if not shutdown_flag.is_set():
+                print("BLE Worker: Reconnecting in 3 seconds...")
+                await asyncio.sleep(3)
+
+        print("BLE Worker: Shutting down")
+
+    # Run the async worker
+    try:
+        asyncio.run(run_ble_worker())
+    except Exception as e:
+        print(f"BLE Worker: Fatal error: {e}")
 
 
 # async def light_led_for_seconds(seconds=5):
@@ -241,31 +375,12 @@ def voice_thread():
                                 locs_str = ", ".join(str(loc) for loc in locs_sorted)
                                 print(f"  • Rack #{rack} locations: {locs_str}")
 
-                            # Send slot occupancy string for all matched locations (once)
-                            try:
-                                all_locs = []
-                                for locs in racks.values():
-                                    all_locs.extend(locs)
-                                # de-duplicate and send
-                                unique_locs = sorted({int(x) for x in all_locs if x})
-                                if unique_locs:
-                                    send_slot_string(unique_locs)
-                            except Exception as e:
-                                print(f"Error sending multi-location slot string: {e}")
-
                         else:
                             # Single result from NLP; print the reported rack/location
                             print(f"Found item: '{keyword}'")
                             print(
                                 f"  • Rack #{result.get('rack')} Location {result.get('location')}"
                             )
-                            # Send slot occupancy string for the single reported location
-                            try:
-                                loc = int(result.get("location", 0))
-                                if loc > 0:
-                                    send_slot_string([loc])
-                            except Exception as e:
-                                print(f"Error sending single-location slot string: {e}")
                         # socketio.emit("highlight_keyword", {"keyword": keyword})
 
                         # Trigger LED light on Nordic board
@@ -273,10 +388,15 @@ def voice_thread():
 
                         # Send BLE signal to Arduino when keyword is found
                         try:
-                            ble_manager.send_signal()
-
+                            # Put event in queue for BLE worker thread
+                            queue_time = time.time()
+                            ble_event_queue.put(
+                                {"keyword": keyword, "queued_at": queue_time}
+                            )
+                            ble_event_ready.set()  # Signal immediately
+                            print(f"✅ Event queued at {queue_time:.3f}")
                         except Exception as e:
-                            print(f"Error sending BLE alert: {e}")
+                            print(f"Error queuing BLE event: {e}")
 
             except GeneratorExit:
                 break
@@ -290,13 +410,8 @@ def voice_thread():
 
 def run_system():
     # ui = SystemUI()
-    # Start BLE manager so Arduino is connected once at startup
-    global ble_manager
-    ble_manager = BLEManager()
-    try:
-        ble_manager.start()
-    except Exception as e:
-        print(f"Failed to start BLE manager: {e}")
+    # BLE Worker thread now handles all BLE communication
+
     t1 = threading.Thread(target=voice_thread, args=(), daemon=True)
     t2 = threading.Thread(
         target=motion_listener,
@@ -308,10 +423,13 @@ def run_system():
         args=(voice_trigger, shutdown_flag, pause_event, wake_stream_active),
         daemon=True,
     )
+    t4 = threading.Thread(target=ble_worker_thread, args=(), daemon=True)
 
     t1.start()
     t2.start()
     t3.start()
+    t4.start()
+    print("All threads started: voice, motion, wake word, BLE worker")
 
     # ui.run()
 

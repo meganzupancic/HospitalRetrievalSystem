@@ -33,7 +33,9 @@ def find_keyword(text, database):
                 # best-effort: query DB for this item
                 try:
                     db_item = database_manager.get_item(entry["item"])
-                    result["isCalled"] = bool(db_item.get("isCalled", False)) if db_item else False
+                    result["isCalled"] = (
+                        bool(db_item.get("isCalled", False)) if db_item else False
+                    )
                 except Exception:
                     result["isCalled"] = False
 
