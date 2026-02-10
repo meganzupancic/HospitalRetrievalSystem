@@ -27,6 +27,8 @@ import time
 import pyttsx3
 from bleak import BleakClient, BleakScanner
 
+from raspi_system.arduino_config import get_all_rack_numbers, get_arduino_config
+
 # from bleak import BleakClient
 # DEVICE_ADDRESS = "C6:10:17:BD:9F:7F"  # your Nordic_LBS MAC
 # LBS_LED_CHAR_UUID = "00001525-1212-efde-1523-785feabcd123"
@@ -35,9 +37,7 @@ from raspi_system.database_manager import load_database_from_sqlite
 from raspi_system.motion_handler import motion_listener
 from raspi_system.nlp_parser import find_keyword
 from raspi_system.speech_to_text import listen_and_transcribe
-
-# from raspi_system.wake_word import wake_word_listener
-from raspi_system.vosk_wake_word import wake_word_listener
+from raspi_system.whisper_wake_word import wake_word_listener
 
 # from socketio_instance import socketio
 
@@ -47,18 +47,21 @@ pause_event = threading.Event()
 shutdown_flag = threading.Event()
 wake_stream_active = threading.Event()
 wake_stream_active.set()
-ble_event_queue = queue.Queue()
-ble_event_ready = threading.Event()  # Signals when queue has items
 
+# Create per-rack BLE queues and ready events
+ble_event_queues = {}  # maps rack number to queue
+ble_event_ready_events = {}  # maps rack number to ready event
 
-SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
-CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1"
-ARDUINO_ADDRESS = "8D:3E:F7:D1:4E:34"
-ARDUINO_NAME = "Nano33BLE-Light"
+for rack_num in get_all_rack_numbers():
+    ble_event_queues[rack_num] = queue.Queue()
+    ble_event_ready_events[rack_num] = threading.Event()
 
 
 class BLEManager:
-    def __init__(self, char_uuid=CHAR_UUID):
+    """Manages BLE connection to a single Arduino."""
+
+    def __init__(self, rack_number, char_uuid):
+        self.rack_number = rack_number
         self.char_uuid = char_uuid
         self.loop = None
         self.thread = None
@@ -81,22 +84,36 @@ class BLEManager:
 
     async def _connection_loop(self):
         """Persistent connection manager that reconnects safely."""
+        config = get_arduino_config(self.rack_number)
+        if not config:
+            print(f"BLEManager: No config found for rack {self.rack_number}")
+            return
+
+        arduino_address = config["address"]
+        arduino_name = config["name"]
+
         while True:
             try:
                 if not self.client or not self.client.is_connected:
-                    print(f"BLEManager: attempting connection to {ARDUINO_ADDRESS}")
-                    self.client = BleakClient(ARDUINO_ADDRESS)
+                    print(
+                        f"BLEManager (Rack {self.rack_number}): attempting connection to {arduino_name} ({arduino_address})"
+                    )
+                    self.client = BleakClient(arduino_address)
 
                     try:
                         await self.client.connect()
-                        print("BLEManager: Connected to Arduino")
+                        print(
+                            f"BLEManager (Rack {self.rack_number}): ✅ Connected to {arduino_name}"
+                        )
                         self.connected_event.set()
 
                         # Allow BlueZ to stabilize
                         await asyncio.sleep(0.5)
 
                     except Exception as e:
-                        print(f"BLEManager: connection failed: {e}")
+                        print(
+                            f"BLEManager (Rack {self.rack_number}): connection failed: {e}"
+                        )
                         await asyncio.sleep(2)
                         continue
 
@@ -104,97 +121,143 @@ class BLEManager:
                 while self.client.is_connected:
                     await asyncio.sleep(0.5)
 
-                print("BLEManager: connection lost, retrying...")
+                print(
+                    f"BLEManager (Rack {self.rack_number}): connection lost, retrying..."
+                )
                 self.connected_event.clear()
 
             except Exception as e:
-                print(f"BLEManager: connection loop error: {e}")
+                print(
+                    f"BLEManager (Rack {self.rack_number}): connection loop error: {e}"
+                )
 
             await asyncio.sleep(1)
 
     def send_signal(self, data: bytes = b"1"):
         """Thread-safe write entry point."""
         if not self.loop:
-            print("BLEManager: loop not started")
+            print(f"BLEManager (Rack {self.rack_number}): loop not started")
             return
 
         fut = asyncio.run_coroutine_threadsafe(self._write(data), self.loop)
         try:
             fut.result(timeout=5)
         except Exception as e:
-            print(f"BLEManager: write timeout/error: {e}")
+            print(f"BLEManager (Rack {self.rack_number}): write timeout/error: {e}")
 
     async def _write(self, data: bytes):
         """Safe BLE write that never races with reconnect."""
         async with self._lock:
             try:
                 if not self.client or not self.client.is_connected:
-                    print("BLEManager: not connected, cannot write")
+                    print(
+                        f"BLEManager (Rack {self.rack_number}): not connected, cannot write"
+                    )
                     return
 
                 await self.client.write_gatt_char(self.char_uuid, data, response=False)
-                print("BLEManager: signal sent")
+                print(f"BLEManager (Rack {self.rack_number}): ✅ Signal sent")
 
             except Exception as e:
-                print(f"BLEManager write failed: {e}")
+                print(f"BLEManager (Rack {self.rack_number}): write failed: {e}")
 
 
-async def send_alert():
-    print("Scanning for Arduino...")
-    devices = await BleakScanner.discover()
-    for d in devices:
-        print(d)
-
-    target = None
-    for d in devices:
-        if "Nano33BLE" in d.name:
-            target = d
-            break
-
-    if not target:
-        print("Arduino not found")
+async def send_alert_to_rack(rack_number):
+    """Scan for Arduino and send alert signal to a specific rack."""
+    config = get_arduino_config(rack_number)
+    if not config:
+        print(f"No Arduino config found for rack {rack_number}")
         return
 
-    async with BleakClient(target.address) as client:
-        print("Connected. Sending alert...")
-        await client.write_gatt_char(CHAR_UUID, b"1")
-        print("Alert sent")
+    arduino_name = config["name"]
+    arduino_address = config["address"]
+    char_uuid = config["char_uuid"]
+
+    print(f"Scanning for {arduino_name} (Rack {rack_number})...")
+    try:
+        devices = await BleakScanner.discover()
+        target = None
+
+        # Try to find by name first
+        for d in devices:
+            if d.name and arduino_name in d.name:
+                target = d
+                print(f"Found {arduino_name} by name at {d.address}")
+                break
+
+        # Fallback to address
+        if not target:
+            for d in devices:
+                if d.address == arduino_address:
+                    target = d
+                    print(f"Found {arduino_name} by address")
+                    break
+
+        if not target:
+            print(f"Arduino {arduino_name} not found for rack {rack_number}")
+            return
+
+        async with BleakClient(target.address) as client:
+            print(f"Connected to {arduino_name}. Sending alert...")
+            await client.write_gatt_char(char_uuid, b"1")
+            print(f"Alert sent to rack {rack_number}")
+    except Exception as e:
+        print(f"Error sending alert to rack {rack_number}: {e}")
 
 
-# Call this when keyword is found:
-# asyncio.run(send_alert())
+# Call when keyword is found to a specific rack:
+# asyncio.run(send_alert_to_rack(rack_number))
 
 
-def ble_worker_thread():
-    """BLE Worker thread that connects to Nano 33 BLE and processes keyword events."""
-    print("BLE Worker: Starting...")
+def ble_worker_thread(rack_number):
+    """BLE Worker thread for a specific rack/Arduino.
+
+    Args:
+        rack_number: The rack number (1-4) this worker handles
+    """
+    config = get_arduino_config(rack_number)
+    if not config:
+        print(f"BLE Worker (Rack {rack_number}): No config found")
+        return
+
+    arduino_name = config["name"]
+    arduino_address = config["address"]
+    char_uuid = config["char_uuid"]
+
+    print(f"BLE Worker (Rack {rack_number}): Starting for {arduino_name}...")
 
     async def find_and_connect():
         """Scan for Arduino by name and connect."""
-        print(f"BLE Worker: Scanning for '{ARDUINO_NAME}'...")
+        print(f"BLE Worker (Rack {rack_number}): Scanning for '{arduino_name}'...")
         try:
             devices = await BleakScanner.discover(timeout=10.0)
             target = None
 
             # First try to find by name
             for device in devices:
-                if device.name and ARDUINO_NAME in device.name:
+                if device.name and arduino_name in device.name:
                     target = device
-                    print(f"BLE Worker: Found Arduino by name at {device.address}")
+                    print(
+                        f"BLE Worker (Rack {rack_number}): Found Arduino by name at {device.address}"
+                    )
                     break
 
             # Fallback: try to find by known address
             if not target:
-                print(f"BLE Worker: Name not found, trying address {ARDUINO_ADDRESS}")
+                print(
+                    f"BLE Worker (Rack {rack_number}): Name not found, trying address {arduino_address}"
+                )
                 for device in devices:
-                    if device.address == ARDUINO_ADDRESS:
+                    if device.address == arduino_address:
                         target = device
-                        print("BLE Worker: Found Arduino by address")
+                        print(
+                            f"BLE Worker (Rack {rack_number}): Found Arduino by address"
+                        )
                         break
 
             if not target:
                 print(
-                    f"BLE Worker: Arduino not found in scan (scanned {len(devices)} devices)"
+                    f"BLE Worker (Rack {rack_number}): Arduino not found in scan (scanned {len(devices)} devices)"
                 )
                 return None
 
@@ -204,42 +267,45 @@ def ble_worker_thread():
             # Use the device object directly for better connection reliability
             client = BleakClient(target)
             await client.connect(timeout=15.0)
-            print(f"BLE Worker: ✅ Connected to {target.name or target.address}")
+            print(
+                f"BLE Worker (Rack {rack_number}): ✅ Connected to {target.name or target.address}"
+            )
 
             # Allow connection to fully stabilize
             await asyncio.sleep(1.0)
             return client
 
         except Exception as e:
-            print(f"BLE Worker: Connection error: {e}")
+            print(f"BLE Worker (Rack {rack_number}): Connection error: {e}")
             return None
 
     async def process_events(client):
         """Process events from queue and write to Arduino."""
         loop = asyncio.get_event_loop()
+        event_queue = ble_event_queues[rack_number]
+        event_ready = ble_event_ready_events[rack_number]
 
         while not shutdown_flag.is_set():
             try:
                 # Check if still connected
                 if not client.is_connected:
-                    print("BLE Worker: ❌ Connection lost")
+                    print(f"BLE Worker (Rack {rack_number}): ❌ Connection lost")
                     return False
 
                 # Wait efficiently for queue items using threading.Event
-                await loop.run_in_executor(
-                    None, lambda: ble_event_ready.wait(timeout=0.1)
-                )
+                await loop.run_in_executor(None, lambda: event_ready.wait(timeout=0.1))
 
                 # Process all queued events
-                while not ble_event_queue.empty():
+                while not event_queue.empty():
                     try:
-                        event = ble_event_queue.get_nowait()
-                        ble_event_queue.task_done()
+                        event = event_queue.get_nowait()
+                        event_queue.task_done()
 
                         recv_time = time.time()
                         queue_latency = recv_time - event.get("queued_at", recv_time)
+                        keyword = event.get("keyword", "unknown")
                         print(
-                            f"BLE Worker: ⚡ Event received (queue latency: {queue_latency*1000:.1f}ms)"
+                            f"BLE Worker (Rack {rack_number}): ⚡ Event received for '{keyword}' (queue latency: {queue_latency*1000:.1f}ms)"
                         )
 
                         # Process the event - write to Arduino
@@ -247,23 +313,23 @@ def ble_worker_thread():
                             write_start = time.time()
                             # Write "1" to trigger LED - fire and forget for minimum latency
                             await client.write_gatt_char(
-                                CHAR_UUID, b"1", response=False
+                                char_uuid, b"1", response=False
                             )
                             write_time = (time.time() - write_start) * 1000
                             print(
-                                f"BLE Worker: ✅ Signal sent (write took {write_time:.1f}ms)"
+                                f"BLE Worker (Rack {rack_number}): ✅ Signal sent (write took {write_time:.1f}ms)"
                             )
                         except Exception as e:
-                            print(f"BLE Worker: Write failed: {e}")
+                            print(f"BLE Worker (Rack {rack_number}): Write failed: {e}")
                             return False
                     except queue.Empty:
                         break
 
                 # Clear the event after processing
-                ble_event_ready.clear()
+                event_ready.clear()
 
             except Exception as e:
-                print(f"BLE Worker: Event processing error: {e}")
+                print(f"BLE Worker (Rack {rack_number}): Event processing error: {e}")
                 return False
 
         return True
@@ -278,27 +344,27 @@ def ble_worker_thread():
                 try:
                     await process_events(client)
                 except Exception as e:
-                    print(f"BLE Worker: Event loop error: {e}")
+                    print(f"BLE Worker (Rack {rack_number}): Event loop error: {e}")
                 finally:
                     try:
                         if client.is_connected:
                             await client.disconnect()
-                            print("BLE Worker: Disconnected")
+                            print(f"BLE Worker (Rack {rack_number}): Disconnected")
                     except:
                         pass
 
             # Wait before reconnecting
             if not shutdown_flag.is_set():
-                print("BLE Worker: Reconnecting in 3 seconds...")
+                print(f"BLE Worker (Rack {rack_number}): Reconnecting in 3 seconds...")
                 await asyncio.sleep(3)
 
-        print("BLE Worker: Shutting down")
+        print(f"BLE Worker (Rack {rack_number}): Shutting down")
 
     # Run the async worker
     try:
         asyncio.run(run_ble_worker())
     except Exception as e:
-        print(f"BLE Worker: Fatal error: {e}")
+        print(f"BLE Worker (Rack {rack_number}): Fatal error: {e}")
 
 
 # async def light_led_for_seconds(seconds=5):
@@ -386,15 +452,28 @@ def voice_thread():
                         # Trigger LED light on Nordic board
                         # asyncio.run(light_led_for_seconds(5))
 
-                        # Send BLE signal to Arduino when keyword is found
+                        # Send BLE signal to the Arduino for the specific rack
                         try:
-                            # Put event in queue for BLE worker thread
-                            queue_time = time.time()
-                            ble_event_queue.put(
-                                {"keyword": keyword, "queued_at": queue_time}
-                            )
-                            ble_event_ready.set()  # Signal immediately
-                            print(f"✅ Event queued at {queue_time:.3f}")
+                            rack_num = result.get("rack")
+                            if rack_num and rack_num in ble_event_queues:
+                                queue_time = time.time()
+                                ble_event_queues[rack_num].put(
+                                    {
+                                        "keyword": keyword,
+                                        "rack": rack_num,
+                                        "queued_at": queue_time,
+                                    }
+                                )
+                                ble_event_ready_events[
+                                    rack_num
+                                ].set()  # Signal immediately
+                                print(
+                                    f"✅ Event queued for Rack {rack_num} at {queue_time:.3f}"
+                                )
+                            else:
+                                print(
+                                    f"❌ Invalid or unconfigured rack number: {rack_num}"
+                                )
                         except Exception as e:
                             print(f"Error queuing BLE event: {e}")
 
@@ -410,7 +489,7 @@ def voice_thread():
 
 def run_system():
     # ui = SystemUI()
-    # BLE Worker thread now handles all BLE communication
+    # BLE Worker threads now handle all BLE communication (one per rack)
 
     t1 = threading.Thread(target=voice_thread, args=(), daemon=True)
     t2 = threading.Thread(
@@ -423,13 +502,23 @@ def run_system():
         args=(voice_trigger, shutdown_flag, pause_event, wake_stream_active),
         daemon=True,
     )
-    t4 = threading.Thread(target=ble_worker_thread, args=(), daemon=True)
 
     t1.start()
     t2.start()
     t3.start()
-    t4.start()
-    print("All threads started: voice, motion, wake word, BLE worker")
+
+    # Start a BLE worker thread for each rack
+    threads = [t1, t2, t3]
+    for rack_num in get_all_rack_numbers():
+        t_ble = threading.Thread(
+            target=ble_worker_thread, args=(rack_num,), daemon=True
+        )
+        t_ble.start()
+        threads.append(t_ble)
+
+    print(
+        f"All threads started: voice, motion, wake word, and BLE workers for {len(get_all_rack_numbers())} racks"
+    )
 
     # ui.run()
 
