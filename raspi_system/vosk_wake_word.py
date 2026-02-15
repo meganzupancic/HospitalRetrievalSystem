@@ -1,6 +1,7 @@
 # wake_word.py
 import json
 import queue
+import time
 
 import sounddevice as sd
 import vosk
@@ -24,6 +25,19 @@ def wake_word_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_ac
     print("Wake word listener started.")
     rec = vosk.KaldiRecognizer(model, 16000)
 
+    # Import BLE queues from system_controller (lazy import to avoid circular dependency)
+    try:
+        from raspi_system.arduino_config import get_all_rack_numbers
+        from raspi_system.system_controller import (
+            ble_event_queues,
+            ble_event_ready_events,
+        )
+
+        ble_available = True
+    except Exception as e:
+        print(f"BLE communication not available: {e}")
+        ble_available = False
+
     try:
         with sd.RawInputStream(
             samplerate=16000,
@@ -46,19 +60,33 @@ def wake_word_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_ac
                     text = result.get("text", "")
                     if WAKE_WORD in text.lower():
                         print(f"Wake word '{WAKE_WORD}' detected.")
-                        # Send 'start' to PC to indicate wake-word activity
-                        try:
-                            import socket
 
-                            HOST = "172.20.10.6"
-                            PORT = 5050
-                            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                                s.settimeout(1)
-                                s.connect((HOST, PORT))
-                                s.sendall(b"start")
-                            print(f"Sent 'start' to {HOST}:{PORT}")
-                        except Exception as e:
-                            print(f"Error sending start message on wake word: {e}")
+                        # Send 'start' to all connected Arduino devices via BLE
+                        if ble_available:
+                            try:
+                                rack_numbers = get_all_rack_numbers()
+                                queue_time = time.time()
+
+                                for rack_num in rack_numbers:
+                                    if rack_num in ble_event_queues:
+                                        ble_event_queues[rack_num].put(
+                                            {
+                                                "keyword": "wake_word_start",
+                                                "rack": rack_num,
+                                                "slot": None,  # No specific slot for wake word
+                                                "queued_at": queue_time,
+                                            }
+                                        )
+                                        ble_event_ready_events[rack_num].set()
+                                        print(
+                                            f"✅ 'start' queued for Arduino on Rack {rack_num}"
+                                        )
+
+                                print(
+                                    f"Sent 'start' to {len(rack_numbers)} Arduino device(s)"
+                                )
+                            except Exception as e:
+                                print(f"Error sending 'start' to Arduino devices: {e}")
 
                         voice_trigger.set()
                         wake_stream_active.clear()

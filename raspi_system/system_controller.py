@@ -37,9 +37,29 @@ from raspi_system.database_manager import load_database_from_sqlite
 from raspi_system.motion_handler import motion_listener
 from raspi_system.nlp_parser import find_keyword
 from raspi_system.speech_to_text import listen_and_transcribe
-from raspi_system.whisper_wake_word import wake_word_listener
+from raspi_system.vosk_wake_word import wake_word_listener
 
 # from socketio_instance import socketio
+
+
+def build_26bit_payload(slot_number=None, start_flag=False):
+    """Build 26-bit payload: bits 0-23 slots 1-24, bit 24 unused, bit 25 start.
+
+    Returns 4 bytes (32 bits) in little-endian format.
+    """
+    bit_pattern = 0
+
+    if slot_number is not None and 1 <= slot_number <= 24:
+        bit_pattern |= 1 << (slot_number - 1)
+
+    if start_flag:
+        bit_pattern |= 1 << 25
+
+    # Mask to keep only lower 26 bits
+    bit_pattern &= 0x03FFFFFF
+
+    return bit_pattern.to_bytes(4, byteorder="little")
+
 
 engine = pyttsx3.init()
 voice_trigger = threading.Event()
@@ -304,21 +324,42 @@ def ble_worker_thread(rack_number):
                         recv_time = time.time()
                         queue_latency = recv_time - event.get("queued_at", recv_time)
                         keyword = event.get("keyword", "unknown")
+                        slot_number = event.get("slot")
                         print(
-                            f"BLE Worker (Rack {rack_number}): ⚡ Event received for '{keyword}' (queue latency: {queue_latency*1000:.1f}ms)"
+                            f"BLE Worker (Rack {rack_number}): ⚡ Event received for '{keyword}' slot {slot_number} (queue latency: {queue_latency*1000:.1f}ms)"
                         )
 
                         # Process the event - write to Arduino
                         try:
                             write_start = time.time()
-                            # Write "1" to trigger LED - fire and forget for minimum latency
-                            await client.write_gatt_char(
-                                char_uuid, b"1", response=False
-                            )
-                            write_time = (time.time() - write_start) * 1000
-                            print(
-                                f"BLE Worker (Rack {rack_number}): ✅ Signal sent (write took {write_time:.1f}ms)"
-                            )
+
+                            # Check if this is a wake word event or keyword event
+                            if keyword == "wake_word_start":
+                                # Wake word event - set start bit (bit 25)
+                                payload = build_26bit_payload(start_flag=True)
+                                print(
+                                    f"BLE Worker (Rack {rack_number}): Sending wake word payload: {payload.hex()}"
+                                )
+                                await client.write_gatt_char(
+                                    char_uuid, payload, response=True
+                                )
+                                write_time = (time.time() - write_start) * 1000
+                                print(
+                                    f"BLE Worker (Rack {rack_number}): ✅ Wake word payload sent (write took {write_time:.1f}ms)"
+                                )
+                            else:
+                                # Keyword event - set slot bit (0-23)
+                                payload = build_26bit_payload(slot_number=slot_number)
+                                print(
+                                    f"BLE Worker (Rack {rack_number}): Sending slot payload: {payload.hex()}"
+                                )
+                                await client.write_gatt_char(
+                                    char_uuid, payload, response=True
+                                )
+                                write_time = (time.time() - write_start) * 1000
+                                print(
+                                    f"BLE Worker (Rack {rack_number}): ✅ Slot {slot_number} payload sent: {payload.hex()} (write took {write_time:.1f}ms)"
+                                )
                         except Exception as e:
                             print(f"BLE Worker (Rack {rack_number}): Write failed: {e}")
                             return False
@@ -399,6 +440,24 @@ def voice_thread():
             voice_trigger.clear()
             pause_event.set()
 
+            # Send wake word notification to all racks
+            print("🎤 Wake word detected! Sending notification to all racks...")
+            queue_time = time.time()
+            for rack_num in ble_event_queues.keys():
+                try:
+                    ble_event_queues[rack_num].put(
+                        {
+                            "keyword": "wake_word_start",
+                            "rack": rack_num,
+                            "slot": None,
+                            "queued_at": queue_time,
+                        }
+                    )
+                    ble_event_ready_events[rack_num].set()
+                    print(f"✅ Wake word event queued for Rack {rack_num}")
+                except Exception as e:
+                    print(f"❌ Error queuing wake word event for Rack {rack_num}: {e}")
+
             try:
                 for phrase in listen_and_transcribe(shutdown_flag):
 
@@ -455,12 +514,16 @@ def voice_thread():
                         # Send BLE signal to the Arduino for the specific rack
                         try:
                             rack_num = result.get("rack")
+                            slot_num = result.get(
+                                "location"
+                            )  # location is the slot number
                             if rack_num and rack_num in ble_event_queues:
                                 queue_time = time.time()
                                 ble_event_queues[rack_num].put(
                                     {
                                         "keyword": keyword,
                                         "rack": rack_num,
+                                        "slot": slot_num,
                                         "queued_at": queue_time,
                                     }
                                 )
@@ -468,7 +531,7 @@ def voice_thread():
                                     rack_num
                                 ].set()  # Signal immediately
                                 print(
-                                    f"✅ Event queued for Rack {rack_num} at {queue_time:.3f}"
+                                    f"✅ Event queued for Rack {rack_num}, Slot {slot_num} at {queue_time:.3f}"
                                 )
                             else:
                                 print(
