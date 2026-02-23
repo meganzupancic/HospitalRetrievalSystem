@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import sqlite3
+import random
 from pathlib import Path
 
 
@@ -28,21 +29,121 @@ def main():
     )
 
     # Insert items exactly as requested by the user.
-    # Requested mapping:
-    # - Thermometer: rack 1, locations 2, 8
-    # - Adhesive Tape: rack 2, locations 9, 20
-    # - Syringe: rack 3, location 1
-    # - Hand Sanitizer: rack 4, location 15
+    # Requested items:
+    # Sterile gloves
+    # Non‑sterile exam gloves
+    # Surgical masks
+    # N95 respirators
+    # Isolation gowns
+    # Face shields
+    # Surgical caps
+    # Shoe covers
+    # Alcohol prep pads
+    # Hand sanitizer
+    # Sterile gauze pads
+    # Gauze rolls
+    # ABD pads
+    # Transparent dressings
+    # Foam dressings
+    # Hydrocolloid dressings
+    # Adhesive bandages
+    # Medical tape
+    # Suture kits
+    # Staple removal kits
+    # IV catheters
+    # IV tubing sets
+    # IV extension sets
+    # Saline flush syringes
+    # Heparin flush syringes
+    # IV start kits
+    # Tourniquets
+    # Needles
+    # Syringes
+    # Chlorhexidine swabs
+    # Normal saline bags
+    # Lactated Ringer’s bags
+    # Dextrose solution bags
+    # Blood collection tubes
+    # Vacutainer holders
+    # Butterfly needles
+    # Specimen labels
+    # Urine collection cups
+    # Stool specimen containers
+    # Biohazard bags
+    # Blood pressure cuffs
+    # Spare stethoscopes
+    # Pulse oximeter probes
+    # Thermometer probe covers
+    # Suction canisters
+    # Yankauer suction tips
+    # Nebulizer kits
+    # Oxygen nasal cannulas
+    # Oxygen masks
+    # Bedpans
+
+    # then assign them to random racks (1-4) and locations (1-20). Some items can have multiple locations
+
+    requested_items = [
+        "Sterile gloves",
+        "Non-sterile exam gloves",
+        "Surgical masks",
+        "N95 respirators",
+        "Isolation gowns",
+        "Face shields",
+        "Surgical caps",
+        "Shoe covers",
+        "Alcohol prep pads",
+        "Hand sanitizer",
+        "Sterile gauze pads",
+        "Gauze rolls",
+        "ABD pads",
+        "Transparent dressings",
+        "Foam dressings",
+        "Hydrocolloid dressings",
+        "Adhesive bandages",
+        "Medical tape",
+        "Suture kits",
+        "Staple removal kits",
+        "IV catheters",
+        "IV tubing sets",
+        "IV extension sets",
+        "Saline flush syringes",
+        "Heparin flush syringes",
+        "IV start kits",
+        "Tourniquets",
+        "Needles",
+        "Syringes",
+        "Chlorhexidine swabs",
+        "Normal saline bags",
+        "Lactated Ringer's bags",
+        "Dextrose solution bags",
+        "Blood collection tubes",
+        "Vacutainer holders",
+        "Butterfly needles",
+        "Specimen labels",
+        "Urine collection cups",
+        "Stool specimen containers",
+        "Biohazard bags",
+        "Blood pressure cuffs",
+        "Spare stethoscopes",
+        "Pulse oximeter probes",
+        "Thermometer probe covers",
+        "Suction canisters",
+        "Yankauer suction tips",
+        "Nebulizer kits",
+        "Oxygen nasal cannulas",
+        "Oxygen masks",
+        "Bedpans",
+    ]
 
     items = []
-    # Thermometer: rack 1, locations 2 and 8
-    items += [("Thermometer", 1, s) for s in (2, 8)]
-    # Adhesive Tape: rack 2, locations 9 and 20
-    items += [("Adhesive Tape", 2, s) for s in (9, 20)]
-    # Syringe: rack 3, location 1
-    items += [("Syringe", 3, 1)]
-    # Hand Sanitizer: rack 4, location 15
-    items += [("Hand Sanitizer", 4, 15)]
+    for item in requested_items:
+        # Assign to random rack (1-4) and location (1-20)
+        rack = random.randint(1, 4)
+        num_locations = random.randint(1, 3)  # Some items have multiple locations
+        locations = random.sample(range(1, 21), num_locations)
+        for location in locations:
+            items.append((item, rack, location))
 
     cur.executemany(
         "INSERT INTO medical_supplies (item, rack, location) VALUES (?,?,?)",
