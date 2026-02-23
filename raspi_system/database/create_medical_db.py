@@ -29,23 +29,20 @@ def main():
 
     # Insert items exactly as requested by the user.
     # Requested mapping:
-    # - Thermometer: locations 1,2
-    # - Needles: location 3
-    # - Hand Sanitizer: locations 4,5,6
-    # - Adhesive Tape: locations 7,8,9,10
-    # - Syringe: locations 11,12
+    # - Thermometer: rack 1, locations 2, 8
+    # - Adhesive Tape: rack 2, locations 9, 20
+    # - Syringe: rack 3, location 1
+    # - Hand Sanitizer: rack 4, location 15
 
     items = []
-    # Thermometer (1,2)
-    items += [("Thermometer", 1, s) for s in (1, 2)]
-    # Needles (3)
-    items += [("Needles", 1, 3)]
-    # Hand Sanitizer (4,5,6)
-    items += [("Hand Sanitizer", 1, s) for s in (4, 5, 6)]
-    # Adhesive Tape (7,8,9,10)
-    items += [("Adhesive Tape", 1, s) for s in (7, 8, 9, 10)]
-    # Syringe (11,12)
-    items += [("Syringe", 1, s) for s in (11, 12)]
+    # Thermometer: rack 1, locations 2 and 8
+    items += [("Thermometer", 1, s) for s in (2, 8)]
+    # Adhesive Tape: rack 2, locations 9 and 20
+    items += [("Adhesive Tape", 2, s) for s in (9, 20)]
+    # Syringe: rack 3, location 1
+    items += [("Syringe", 3, 1)]
+    # Hand Sanitizer: rack 4, location 15
+    items += [("Hand Sanitizer", 4, 15)]
 
     cur.executemany(
         "INSERT INTO medical_supplies (item, rack, location) VALUES (?,?,?)",
