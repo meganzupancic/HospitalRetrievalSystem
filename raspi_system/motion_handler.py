@@ -8,21 +8,33 @@ import RPi.GPIO as GPIO
 # Setup GPIO
 PIR_PIN = 17  # GPIO17
 
+GPIO.setwarnings(False)  # Disable warnings if GPIO already in use
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(PIR_PIN, GPIO.IN)
 
 motion_triggered = False
+last_motion_time = 0
 
 
 def motion_callback(channel):
-    global motion_triggered
-    if not motion_triggered:
-        motion_triggered = True
-        print("Motion detected!")
+    global motion_triggered, last_motion_time
+    current_time = time.time()
+
+    # Debounce: ignore triggers within 2 seconds
+    if current_time - last_motion_time < 2.0:
+        return
+
+    last_motion_time = current_time
+    motion_triggered = True
+
+    try:
+        print(f"🎯 Motion detected on GPIO {channel}!")
         # This will trigger the voice thread just like wake word
         motion_callback.voice_trigger.set()
         motion_callback.wake_stream_active.clear()
-        # Send a "start" message to the PC to indicate activity
+        print("✅ Voice trigger set, wake stream cleared")
+
+        # Send a "start" message to the PC to indicate activity (non-blocking)
         try:
             import socket
 
@@ -32,30 +44,51 @@ def motion_callback(channel):
                 s.settimeout(1)
                 s.connect((HOST, PORT))
                 s.sendall(b"start")
-            print(f"Sent 'start' to {HOST}:{PORT}")
+            print(f"📡 Sent 'start' to {HOST}:{PORT}")
         except Exception as e:
-            print(f"Error sending start message on motion: {e}")
+            print(f"⚠️ Warning: Could not send start message (not critical): {e}")
+    except Exception as e:
+        print(f"❌ Error in motion callback: {e}")
 
 
 def motion_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_active):
-    print("Motion listener started.")
+    global motion_triggered
+    print("🚀 Motion listener started.")
     # Attach shared objects to callback
     motion_callback.voice_trigger = voice_trigger
     motion_callback.wake_stream_active = wake_stream_active
 
     # Register event detection (rising edge = motion)
-    GPIO.add_event_detect(
-        PIR_PIN, GPIO.RISING, callback=motion_callback, bouncetime=2000
-    )
+    try:
+        GPIO.add_event_detect(
+            PIR_PIN, GPIO.RISING, callback=motion_callback, bouncetime=2000
+        )
+        print(f"✅ GPIO event detection registered on pin {PIR_PIN}")
+    except Exception as e:
+        print(f"❌ Failed to register GPIO event detection: {e}")
+        return
 
     try:
+        print("👀 Monitoring for motion...")
         while not shutdown_flag.is_set():
             if pause_event.is_set():
                 time.sleep(1)  # paused mode
             else:
                 time.sleep(0.1)  # idle loop
-            if wake_stream_active.is_set():
-                global motion_triggered
+
+            # Reset motion_triggered after wake_stream becomes active again
+            if wake_stream_active.is_set() and motion_triggered:
                 motion_triggered = False  # reset for next detection
+                print("🔄 Motion sensor ready for next trigger")
+    except KeyboardInterrupt:
+        print("⚠️ Motion listener interrupted")
+    except Exception as e:
+        print(f"❌ Error in motion listener: {e}")
     finally:
+        try:
+            GPIO.remove_event_detect(PIR_PIN)
+            print("🛑 GPIO event detection removed")
+        except:
+            pass
         GPIO.cleanup()
+        print("🧹 GPIO cleanup complete")

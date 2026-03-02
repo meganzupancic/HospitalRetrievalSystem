@@ -435,6 +435,8 @@ def voice_thread():
     # except Exception as e:
     #     print(f"Error loading database: {e}")
 
+    INACTIVITY_TIMEOUT = 30  # seconds
+
     while not shutdown_flag.is_set():
         if voice_trigger.wait(timeout=1):
             voice_trigger.clear()
@@ -459,13 +461,38 @@ def voice_thread():
                     print(f"❌ Error queuing wake word event for Rack {rack_num}: {e}")
 
             try:
+                last_activity_time = time.time()
+                last_status_print = time.time()
+                print("⏱️  Listening for keywords (30s timeout)...")
+
                 for phrase in listen_and_transcribe(shutdown_flag):
+                    # Check for timeout
+                    current_time = time.time()
+                    elapsed = current_time - last_activity_time
+
+                    # Print periodic status (every 10 seconds)
+                    if current_time - last_status_print >= 10:
+                        remaining = max(0, INACTIVITY_TIMEOUT - elapsed)
+                        print(f"⏱️  Still listening... ({remaining:.0f}s until timeout)")
+                        last_status_print = current_time
+
+                    if elapsed > INACTIVITY_TIMEOUT:
+                        print(
+                            f"\n⏰ Timeout: No activity for {INACTIVITY_TIMEOUT} seconds"
+                        )
+                        print("🔄 Resetting to wake word/motion detection mode...")
+                        break
 
                     if phrase is None or not isinstance(phrase, str):
                         continue
 
                     if shutdown_flag.is_set():
                         break
+
+                    # Update activity time when we receive a phrase
+                    last_activity_time = time.time()
+                    last_status_print = time.time()  # Reset status print timer too
+                    print("⏱️  Activity detected, timeout reset")
 
                     db = load_database_from_sqlite()
 
@@ -541,12 +568,14 @@ def voice_thread():
                             print(f"Error queuing BLE event: {e}")
 
             except GeneratorExit:
+                print("🛑 Voice listening stopped (generator exit)")
                 break
             except Exception as e:
-                print(f"Error in voice thread: {e}")
+                print(f"❌ Error in voice thread: {e}")
 
             pause_event.clear()
             wake_stream_active.set()
+            print("✅ System reset complete - now listening for wake word or motion")
             time.sleep(0.5)
 
 
