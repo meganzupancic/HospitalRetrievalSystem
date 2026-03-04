@@ -1,6 +1,6 @@
 # Extracts and normalizes keywords
 
-from . import database_manager
+from . import rack_database_adapter as database_manager
 
 
 def find_keyword(text, database):

@@ -28,14 +28,14 @@ import pyttsx3
 from bleak import BleakClient, BleakScanner
 
 from raspi_system.arduino_config import get_all_rack_numbers, get_arduino_config
+from raspi_system.motion_handler import motion_listener
+from raspi_system.nlp_parser import find_keyword
 
 # from bleak import BleakClient
 # DEVICE_ADDRESS = "C6:10:17:BD:9F:7F"  # your Nordic_LBS MAC
 # LBS_LED_CHAR_UUID = "00001525-1212-efde-1523-785feabcd123"
 # from app import socketio
-from raspi_system.database_manager import load_database_from_sqlite
-from raspi_system.motion_handler import motion_listener
-from raspi_system.nlp_parser import find_keyword
+from raspi_system.rack_database_adapter import load_database_from_sqlite
 from raspi_system.speech_to_text import listen_and_transcribe
 from raspi_system.vosk_wake_word import wake_word_listener
 
@@ -441,6 +441,9 @@ def voice_thread():
         if voice_trigger.wait(timeout=1):
             voice_trigger.clear()
             pause_event.set()
+            
+            # Give wake word listener time to release the audio device
+            time.sleep(0.5)
 
             # Send wake word notification to all racks
             print("🎤 Wake word detected! Sending notification to all racks...")
@@ -569,14 +572,16 @@ def voice_thread():
 
             except GeneratorExit:
                 print("🛑 Voice listening stopped (generator exit)")
-                break
             except Exception as e:
                 print(f"❌ Error in voice thread: {e}")
-
-            pause_event.clear()
-            wake_stream_active.set()
-            print("✅ System reset complete - now listening for wake word or motion")
-            time.sleep(0.5)
+                import traceback
+                traceback.print_exc()
+            finally:
+                # Always reset to wake word mode after listening session ends
+                pause_event.clear()
+                wake_stream_active.set()
+                print("✅ System reset complete - now listening for wake word or motion")
+                time.sleep(0.5)
 
 
 def run_system():
@@ -629,13 +634,43 @@ def run_transcriber():
     except Exception as e:
         print(f"Error loading database: {e}")
     print("Loaded database:", db)
-    while True:
-        text = listen_and_transcribe()
-        # print(f"Heard: {text}")
-        # Respond to conversational phrases
-        if "thank you" in text.lower():
-            response = "You're welcome!"
-            print(response)
-            # speak(response)
-        result = find_keyword(text, db)
-        print(result)
+    
+    # Create a shutdown flag for the transcriber
+    transcriber_shutdown = threading.Event()
+    
+    print("\n🎤 Listening... Speak now! (Press Ctrl+C to exit)\n")
+    
+    try:
+        while not transcriber_shutdown.is_set():
+            text = listen_and_transcribe(transcriber_shutdown)
+            if not text:
+                continue
+            
+            print(f"\n🗣️  Heard: '{text}'")
+            
+            # Respond to conversational phrases
+            if "thank you" in text.lower():
+                response = "You're welcome!"
+                print(f"💬 {response}")
+                # speak(response)
+            
+            result = find_keyword(text, db)
+            if result:
+                print(f"✅ Found: {result['item']} at Rack {result['rack']}, Location {result['location']}")
+            else:
+                print("❌ No matching item found")
+            
+            print("\n🎤 Listening...\n")
+    except KeyboardInterrupt:
+        print("\n\n👋 Shutting down voice control...")
+        transcriber_shutdown.set()
+
+
+if __name__ == "__main__":
+    print("\n" + "="*60)
+    print("  Hospital Retrieval System - Voice Control")
+    print("="*60 + "\n")
+    
+    # Choose which mode to run
+    # run_system()        # Full system with motion, wake word, BLE
+    run_transcriber()     # Simple voice transcription mode for testing

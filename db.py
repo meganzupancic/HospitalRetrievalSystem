@@ -1,7 +1,14 @@
+import os
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path("rack.db")
+# Support both local development and Raspberry Pi deployment
+# If running from raspi_system directory, use database/rack.db
+# Otherwise use rack.db in current directory
+if os.path.exists(os.path.join(os.path.dirname(__file__), "raspi_system", "database")):
+    DB_PATH = Path(os.path.dirname(__file__)) / "raspi_system" / "database" / "rack.db"
+else:
+    DB_PATH = Path("rack.db")
 
 
 def get_conn():
@@ -47,6 +54,10 @@ def init_db():
             pass
         try:
             conn.execute("ALTER TABLE items ADD COLUMN color TEXT;")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE items ADD COLUMN isCalled INTEGER DEFAULT 0;")
         except sqlite3.OperationalError:
             pass
 

@@ -28,15 +28,15 @@ q = queue.Queue()
 
 def set_stt_model_choice(choice):
     """Set the STT model based on user choice.
-    
+
     Args:
         choice: Can be 1-4 (numeric selection) or model name string
-        
+
     Returns:
         str: Name of the selected model
     """
     global model, model_path, current_model_name
-    
+
     # Map numeric choices to model names
     choice_map = {
         1: "vosk_small",
@@ -48,25 +48,25 @@ def set_stt_model_choice(choice):
         4: "whisper_base",
         "4": "whisper_base",
     }
-    
+
     # Handle numeric or string choice
     if isinstance(choice, (int, str)) and choice in choice_map:
         model_name = choice_map[choice]
     else:
         model_name = str(choice).lower().replace(" ", "_")
-    
+
     # Get model path
     if model_name not in AVAILABLE_MODELS:
         print(f"⚠️  Unknown model '{model_name}', defaulting to vosk_small")
         model_name = "vosk_small"
-    
+
     model_path = AVAILABLE_MODELS[model_name]
-    
+
     if model_path is None:
         print(f"⚠️  Model '{model_name}' not implemented yet, defaulting to vosk_small")
         model_name = "vosk_small"
         model_path = AVAILABLE_MODELS[model_name]
-    
+
     # Load the model
     try:
         print(f"📦 Loading STT model: {model_name}...")
@@ -138,8 +138,8 @@ def listen_and_transcribe(shutdown_flag):
                             yield text
                 else:
                     partial = json.loads(rec.PartialResult()).get("partial", "")
-                    # Do not print partials to the main terminal (reduces duplicates/noise)
-                    # if partial:
-                    #     print(f"Partial: {partial}", end="\r")
+                    # Print partials in real-time for live feedback
+                    if partial:
+                        print(f"Partial: {partial}", end="\r")
     except Exception as e:
         print(f"Error in audio stream: {e}")
