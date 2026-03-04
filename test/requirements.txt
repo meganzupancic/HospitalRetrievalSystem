@@ -1,0 +1,12 @@
+# Test-specific requirements
+# These should already be in the main requirements.txt
+# Listed here for reference and easy installation if running test in isolation
+
+Flask==3.1.2
+Flask-SocketIO==5.5.1
+openai-whisper
+sounddevice==0.5.3
+rapidfuzz
+numpy==2.0.2
+python-socketio>=5.0.0
+openpyxl>=3.0.0
