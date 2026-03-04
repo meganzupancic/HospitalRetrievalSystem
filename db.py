@@ -68,15 +68,33 @@ def init_db():
             for rack_num in range(1, 5):  # racks 1–4
                 conn.execute(
                     "INSERT INTO racks(name, rows, cols) VALUES(?,?,?)",
-                    (f"Rack {rack_num}", 5, 10),  # 5 rows, 10 cols
+                    (f"Rack {rack_num}", 4, 20),  # 4 rows (1 top + 3 bottom), 20 cols
                 )
                 rack_id = conn.execute(
                     "SELECT id FROM racks WHERE name=?", (f"Rack {rack_num}",)
                 ).fetchone()["id"]
 
-                for row in range(5):  # 5 rows
-                    for col in range(10):  # 10 columns
+                for row in range(4):  # 4 rows
+                    for col in range(20):  # 20 columns
                         conn.execute(
                             "INSERT INTO rack_slots(rack_id, row, col) VALUES(?,?,?)",
                             (rack_id, row, col),
                         )
+
+    # Migrate existing racks to 20 columns if they still have 10
+    with get_conn() as conn:
+        racks = conn.execute("SELECT id, cols FROM racks").fetchall()
+        for rack in racks:
+            if rack["cols"] != 20:
+                # Update rack to have 20 columns
+                conn.execute("UPDATE racks SET cols = 20 WHERE id = ?", (rack["id"],))
+                # Delete old slots
+                conn.execute("DELETE FROM rack_slots WHERE rack_id = ?", (rack["id"],))
+                # Create new slots with 20 columns and 4 rows
+                for row in range(4):
+                    for col in range(20):
+                        conn.execute(
+                            "INSERT INTO rack_slots(rack_id, row, col) VALUES(?,?,?)",
+                            (rack["id"], row, col),
+                        )
+                conn.commit()

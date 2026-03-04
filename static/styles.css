@@ -1,7 +1,12 @@
 :root {
-  --gap: px;
+  --gap: 4px;
   /* Each slot = (viewport width - total gaps) / 10 */
   --slot-size: calc((100vw - (9 * var(--gap)) - 2 * var(--gap)) / 10);
+  --rack-cols: 20;
+  --rack-row-height: 120px;
+  --rack-bottom-rows: 3;
+  --rack-col-gap: 4px;
+  --rack-row-gap: 16px;
   --occupied-bg: #004e89;
   --empty-bg: #e6eef6;
   --Primary-Yellow: #F6EC9F;
@@ -75,9 +80,11 @@ body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
 /* Rack container */
 .rack-top {
   display: grid;
-  grid-template-columns: repeat(10, 1fr);
-  column-gap: 4px;
-  row-gap: 16px;
+  grid-template-columns: repeat(var(--rack-cols), minmax(0, 1fr));
+  grid-auto-rows: var(--rack-row-height);
+  column-gap: var(--rack-col-gap);
+  row-gap: var(--rack-row-gap);
+  align-items: center;  /* center items vertically */
 
   /* Match the bottom box width and alignment */
   border-left: 2px solid transparent;
@@ -85,15 +92,13 @@ body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
   padding: 8px; 
   box-sizing: border-box;
 
-  height: 120px; /* same as one row in the bottom box */
+  min-height: var(--rack-row-height);
 }
 
 .rack-bottom {
-  display: grid;
-  grid-template-columns: repeat(10, 1fr);
-  grid-template-rows: repeat(4, 1fr);
-  column-gap: 4px;
-  row-gap: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rack-row-gap);
 
   border: 2px solid #000;   /* rectangular border */
   border-radius: 0;
@@ -102,19 +107,21 @@ body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
 
   width: 100%;
   max-width: 100vw;
-  height: 480px;            /* 4 rows × 120px each */
+  min-height: calc((var(--rack-bottom-rows) * var(--rack-row-height)) + ((var(--rack-bottom-rows) - 1) * var(--rack-row-gap)) + 16px);
   margin: 0 auto;
-
-  /* horizontal divider lines */
-  background:
-    linear-gradient(#000, #000) 0 calc(25%) / 100% 2px no-repeat,
-    linear-gradient(#000, #000) 0 calc(50%) / 100% 2px no-repeat,
-    linear-gradient(#000, #000) 0 calc(75%) / 100% 2px no-repeat;
-  background-clip: content-box; /* draw inside the padding box */
 }
 
 .rack-row {
-  display: contents; /* wrapper disappears, children flow into parent grid */
+  display: grid;
+  grid-template-columns: repeat(var(--rack-cols), minmax(0, 1fr));
+  grid-auto-rows: var(--rack-row-height);
+  column-gap: var(--rack-col-gap);
+  align-items: stretch;
+}
+
+.rack-row + .rack-row {
+  border-top: 2px solid #000;
+  padding-top: var(--rack-row-gap);
 }
 
 .rack-select-section {
@@ -122,6 +129,14 @@ body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
   justify-content: center;   /* center horizontally */
   gap: 12px;                 /* space between buttons */
   margin-top: 16px;
+  align-items: center;
+}
+
+.rack-config-section {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 12px;
   align-items: center;
 }
 
@@ -141,6 +156,26 @@ body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
   background: #2F6B3F;       /* dark green when active */
   color: #fff;               /* white text for contrast */
   font-weight: 700;          /* bold label */
+}
+
+.config-btn {
+  display: flex;
+  padding: 8px 16px;
+  justify-content: center;
+  align-items: center;
+  border-radius: 4px;
+  background: #98D6A5;
+  cursor: pointer;
+  border: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.config-btn.active {
+  background: #2F6B3F;
+  color: #fff;
+  font-weight: 700;
 }
 
 /* Color picker swatches for add-item form */
@@ -196,6 +231,7 @@ body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
 
 
 .slot {
+  position: relative;
   border-radius: 6px;
   background: var(--empty-bg);
   display: flex;
@@ -203,7 +239,7 @@ body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
   align-items: center;
   font-size: 12px;
   width: 100%;
-  height: 100%;
+  min-height: var(--rack-row-height);
   overflow: hidden;
 }
 
@@ -230,25 +266,6 @@ body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
 
 /* Edit mode: show delete button */
 .slot.edit {
-  position: relative;
-}
-
-.slot.edit .delete-btn {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  background: #d9534f;
-  color: white;
-  border: none;
-  border-radius: 50%;
-  width: 16px;
-  height: 16px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-
-.slot {
   position: relative;
 }
 

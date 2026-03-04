@@ -441,7 +441,7 @@ def voice_thread():
         if voice_trigger.wait(timeout=1):
             voice_trigger.clear()
             pause_event.set()
-            
+
             # Give wake word listener time to release the audio device
             time.sleep(0.5)
 
@@ -575,12 +575,15 @@ def voice_thread():
             except Exception as e:
                 print(f"❌ Error in voice thread: {e}")
                 import traceback
+
                 traceback.print_exc()
             finally:
                 # Always reset to wake word mode after listening session ends
                 pause_event.clear()
                 wake_stream_active.set()
-                print("✅ System reset complete - now listening for wake word or motion")
+                print(
+                    "✅ System reset complete - now listening for wake word or motion"
+                )
                 time.sleep(0.5)
 
 
@@ -634,32 +637,34 @@ def run_transcriber():
     except Exception as e:
         print(f"Error loading database: {e}")
     print("Loaded database:", db)
-    
+
     # Create a shutdown flag for the transcriber
     transcriber_shutdown = threading.Event()
-    
+
     print("\n🎤 Listening... Speak now! (Press Ctrl+C to exit)\n")
-    
+
     try:
         while not transcriber_shutdown.is_set():
             text = listen_and_transcribe(transcriber_shutdown)
             if not text:
                 continue
-            
+
             print(f"\n🗣️  Heard: '{text}'")
-            
+
             # Respond to conversational phrases
             if "thank you" in text.lower():
                 response = "You're welcome!"
                 print(f"💬 {response}")
                 # speak(response)
-            
+
             result = find_keyword(text, db)
             if result:
-                print(f"✅ Found: {result['item']} at Rack {result['rack']}, Location {result['location']}")
+                print(
+                    f"✅ Found: {result['item']} at Rack {result['rack']}, Location {result['location']}"
+                )
             else:
                 print("❌ No matching item found")
-            
+
             print("\n🎤 Listening...\n")
     except KeyboardInterrupt:
         print("\n\n👋 Shutting down voice control...")
@@ -667,10 +672,10 @@ def run_transcriber():
 
 
 if __name__ == "__main__":
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("  Hospital Retrieval System - Voice Control")
-    print("="*60 + "\n")
-    
+    print("=" * 60 + "\n")
+
     # Choose which mode to run
     # run_system()        # Full system with motion, wake word, BLE
-    run_transcriber()     # Simple voice transcription mode for testing
+    run_transcriber()  # Simple voice transcription mode for testing

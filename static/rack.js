@@ -12,14 +12,19 @@ document.addEventListener('DOMContentLoaded', () => {
   const addCustomBtn = document.getElementById('add-custom-tag');
   const otherNamesInput = document.getElementById('item-other-names');
   const swatches = Array.from(document.querySelectorAll('.color-swatch'));
+  const widthInput = document.getElementById('item-width');
+  const widthIncrease = document.getElementById('width-increase');
+  const widthDecrease = document.getElementById('width-decrease');
 
   // State
   let addMode = false;
   let selectedSlots = [];
   let selectedTags = [];
   let selectedColor = null;
+  let itemWidth = 1;
   const params = new URLSearchParams(window.location.search);
   let currentRackId = params.get('rack') || '1';
+  let currentConfig = params.get('config') || '4x4';
 
   // Helpers
   function setAddMode(on) {
@@ -34,6 +39,8 @@ document.addEventListener('DOMContentLoaded', () => {
       otherNamesInput.value = '';
       swatches.forEach(s => s.classList.remove('selected'));
       selectedColor = null;
+      itemWidth = 1;
+      if (widthInput) widthInput.value = '1';
       form.style.display = 'none';
     } else {
       form.style.display = 'block';
@@ -42,6 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (swatches.length) {
         selectSwatch(swatches[0]);
       }
+      if (widthInput && !widthInput.value) widthInput.value = '1';
     }
   }
 
@@ -55,6 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
         otherNames: otherNamesInput.value || '',
         selectedColor: selectedColor || null,
         selectedSlots: selectedSlots || [],
+        itemWidth: itemWidth || 1,
         rackId: currentRackId || null,
         ts: Date.now()
       };
@@ -77,6 +86,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (d.selectedColor) {
         const sw = swatches.find(s => s.dataset.color === d.selectedColor);
         if (sw) selectSwatch(sw); else selectedColor = d.selectedColor;
+      }
+      if (d.itemWidth && widthInput) {
+        widthInput.value = d.itemWidth;
+        itemWidth = d.itemWidth;
       }
       // restore selected slots only if those slot IDs exist on this page
       selectedSlots = Array.isArray(d.selectedSlots) ? d.selectedSlots.filter(id => slots.some(s => s.dataset.slotId === id)) : [];
@@ -258,7 +271,8 @@ document.addEventListener('DOMContentLoaded', () => {
           label: label,
           tags: selectedTags,
           other_names: otherArr,
-          color: selectedColor
+          color: selectedColor,
+          width: itemWidth || 1
         })
       });
       if (!res.ok) {
@@ -328,6 +342,59 @@ document.addEventListener('DOMContentLoaded', () => {
   if (sel) {
     document.querySelectorAll('.rack-btn').forEach(b => b.classList.remove('active'));
     sel.classList.add('active');
+  }
+
+  // Width adjustment controls
+  if (widthIncrease) {
+    widthIncrease.addEventListener('click', () => {
+      const maxCols = currentConfig === '4x4' ? 4 : 6;
+      const currentVal = parseInt(widthInput.value) || 1;
+      if (currentVal < maxCols) {
+        widthInput.value = currentVal + 1;
+        itemWidth = currentVal + 1;
+        saveDraft();
+      }
+    });
+  }
+
+  if (widthDecrease) {
+    widthDecrease.addEventListener('click', () => {
+      const currentVal = parseInt(widthInput.value) || 1;
+      if (currentVal > 1) {
+        widthInput.value = currentVal - 1;
+        itemWidth = currentVal - 1;
+        saveDraft();
+      }
+    });
+  }
+
+  if (widthInput) {
+    widthInput.addEventListener('change', () => {
+      const maxCols = currentConfig === '4x4' ? 4 : 6;
+      let val = parseInt(widthInput.value) || 1;
+      if (val < 1) val = 1;
+      if (val > maxCols) val = maxCols;
+      widthInput.value = val;
+      itemWidth = val;
+      saveDraft();
+    });
+  }
+
+  // Rack configuration buttons
+  document.querySelectorAll('.config-btn').forEach(b => b.addEventListener('click', () => {
+    const config = b.dataset.config;
+    saveDraft();
+    const params = new URLSearchParams(window.location.search);
+    params.set('config', config);
+    const qs = params.toString();
+    window.location = `/?${qs}`;
+  }));
+
+  // Highlight current config button
+  const currentConfigBtn = document.querySelector(`.config-btn[data-config="${currentConfig}"]`);
+  if (currentConfigBtn) {
+    document.querySelectorAll('.config-btn').forEach(b => b.classList.remove('active'));
+    currentConfigBtn.classList.add('active');
   }
 
   // Attempt to restore draft if present

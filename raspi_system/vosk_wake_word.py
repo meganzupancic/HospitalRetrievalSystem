@@ -27,16 +27,12 @@ def wake_word_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_ac
 
     # Import BLE queues from system_controller (lazy import to avoid circular dependency)
     try:
-        from raspi_system.arduino_config import get_all_rack_numbers
-        from raspi_system.system_controller import (
-            ble_event_queues,
-            ble_event_ready_events,
-        )
 
         ble_available = True
     except Exception as e:
         print(f"BLE communication not available: {e}")
         ble_available = False
+
 
 def wake_word_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_active):
     print("Wake word listener started.")
@@ -60,7 +56,7 @@ def wake_word_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_ac
         if not wake_stream_active.is_set():
             time.sleep(0.2)
             continue
-        
+
         # Open stream only when needed
         try:
             with sd.RawInputStream(
@@ -71,7 +67,7 @@ def wake_word_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_ac
                 callback=callback,
             ):
                 print("Wake word stream opened")
-                
+
                 # Listen only while wake_stream_active is set and shutdown not requested
                 while wake_stream_active.is_set() and not shutdown_flag.is_set():
                     try:
@@ -110,15 +106,19 @@ def wake_word_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_ac
                                         f"Sent 'start' to {len(rack_numbers)} Arduino device(s)"
                                     )
                                 except Exception as e:
-                                    print(f"Error sending 'start' to Arduino devices: {e}")
+                                    print(
+                                        f"Error sending 'start' to Arduino devices: {e}"
+                                    )
 
                             voice_trigger.set()
                             wake_stream_active.clear()
-                            print("⏸️  Wake word stream paused for voice transcription...")
+                            print(
+                                "⏸️  Wake word stream paused for voice transcription..."
+                            )
                             break  # Exit inner loop, close stream
-                
+
                 print("Wake word stream closed")
-                
+
         except Exception as e:
             print(f"Error in wake word listener: {e}")
             time.sleep(0.5)  # Brief pause before retrying

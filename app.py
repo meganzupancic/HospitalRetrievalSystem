@@ -31,7 +31,7 @@ def color_for_item(label):
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def pad_slots(slots, cols=10, rows=5):
+def pad_slots(slots, cols=20, rows=4):
     total = cols * rows
     padded = slots[:]
     while len(padded) < total:
@@ -139,7 +139,7 @@ def get_rack(rack_id=1):
     return rack, slots
 
 
-def group_slots(slots, cols=10, rows=5):
+def group_slots(slots, cols=20, rows=4):
     grouped_rows = []
     slots_by_row = {}
     for s in slots:
@@ -191,9 +191,17 @@ def group_slots(slots, cols=10, rows=5):
 @app.get("/")
 def rack_view():
     rack_id = int(request.args.get("rack", 1))  # default to rack 1
+    config = request.args.get("config", "4x4")  # default to 4x4
+
+    # Parse config to determine number of columns to display
+    if config == "6x4":
+        cols_to_display = 6
+    else:  # default to 4x4
+        cols_to_display = 4
+
     rack, slots = get_rack(rack_id)
 
-    # Use the rack's own cols/rows from the DB
+    # Keep all slots, don't filter - group_slots will work with all 20 columns
     rows = group_slots(slots, cols=rack["cols"], rows=rack["rows"])
 
     edit_mode = request.args.get("edit") == "1"
@@ -203,8 +211,10 @@ def rack_view():
         slots=slots,
         rows=rows,
         edit_mode=edit_mode,
-        cols=rack["cols"],
+        cols=cols_to_display,  # only used for display limiting
+        cols_full=rack["cols"],  # full 20 columns for slicing
         rows_count=rack["rows"],
+        config=config,
     )
 
 

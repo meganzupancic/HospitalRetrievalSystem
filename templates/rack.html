@@ -7,7 +7,7 @@
   <!-- Top row -->
   <div class="rack-top">
     {% if edit_mode %}
-      {% for s in slots[:10] %}
+      {% for s in slots[:cols_full] %}
         <div class="slot edit {{ 'occupied' if s.item_id }}"
              style="background-color: {{ s.color }};"
              data-slot-id="{{ s.slot_id if s.slot_id else '' }}"
@@ -37,9 +37,9 @@
   </div>
   <div class="rack-bottom">
     {% if edit_mode %}
-      {% for r in range(1,5) %}
+      {% for r in range(1,4) %}
         <div class="rack-row">
-          {% for s in slots[r*10:(r+1)*10] %}
+          {% for s in slots[r*cols_full:(r+1)*cols_full] %}
             <div class="slot edit {{ 'occupied' if s.item_id }}"
             style="background-color: {{ s.color }}; grid-column: span {{ s.span if s.span else 1 }};"
             data-slot-id="{{ s.slot_id if s.slot_id else '' }}"
@@ -54,7 +54,7 @@
         </div>
       {% endfor %}
     {% else %}
-      {% for row in rows[1:] %}
+      {% for row in rows[1:4] %}
         <div class="rack-row">
           {% for group in row %}
             <div class="slot {{ 'occupied' if group.slot.item_id }}"
@@ -83,6 +83,12 @@
   <button class="rack-btn" data-rack="2">2</button>
   <button class="rack-btn" data-rack="3">3</button>
   <button class="rack-btn" data-rack="4">4</button>
+</section>
+
+<section class="rack-config-section" style="margin-top:12px;">
+  <span><strong>Rack Size:</strong></span>
+  <button class="config-btn" data-config="4x4">4x4</button>
+  <button class="config-btn" data-config="6x4">6x4</button>
 </section>
 
 <section class="add-item-section" style="margin-top:16px;">
@@ -127,6 +133,15 @@
             <div class="color-swatch" data-color="#f9d9f9" style="background:#f9d9f9"></div>
             <div class="color-swatch" data-color="#e8f7d9" style="background:#e8f7d9"></div>
             <div class="color-swatch" data-color="#fdeff2" style="background:#fdeff2"></div>
+          </div>
+        </div>
+
+        <div>
+          <label style="font-weight:600;">Item Width (slots)</label>
+          <div style="display:flex; gap:8px; align-items:center; margin-top:6px;">
+            <button type="button" id="width-decrease" style="width:32px; height:32px; border:1px solid #ccc; border-radius:4px; cursor:pointer;">−</button>
+            <input type="number" id="item-width" min="1" max="10" value="1" style="width:60px; text-align:center; border:1px solid #ccc; border-radius:4px; padding:4px;" />
+            <button type="button" id="width-increase" style="width:32px; height:32px; border:1px solid #ccc; border-radius:4px; cursor:pointer;">+</button>
           </div>
         </div>
 
