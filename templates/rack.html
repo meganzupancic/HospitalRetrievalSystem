@@ -6,7 +6,7 @@
 <section class="rack-grid-wrapper">
   <!-- Top row -->
   <div class="rack-top">
-    {% if edit_mode %}
+    {% if remove_mode %}
       {% for s in slots[:cols_full] %}
         <div class="slot edit {{ 'occupied' if s.item_id }}"
              style="background-color: {{ s.color }};"
@@ -36,7 +36,7 @@
     {% endif %}
   </div>
   <div class="rack-bottom">
-    {% if edit_mode %}
+    {% if remove_mode %}
       {% for r in range(1,4) %}
         <div class="rack-row">
           {% for s in slots[r*cols_full:(r+1)*cols_full] %}
@@ -93,7 +93,8 @@
 
 <section class="add-item-section" style="margin-top:16px;">
   <button id="add-item-btn">Add New Item</button>
-  <button id="edit-mode-btn">Edit Mode</button>
+  <button id="remove-items-btn">Remove Items</button>
+  <button id="edit-item-btn">Edit Item</button>
   <div id="add-item-form" style="display:none; margin-top:12px;">
       <div style="display:flex; flex-direction:column; gap:8px; max-width:560px;">
       <input type="text" id="item-name" placeholder="Enter item name" />
@@ -133,15 +134,6 @@
             <div class="color-swatch" data-color="#f9d9f9" style="background:#f9d9f9"></div>
             <div class="color-swatch" data-color="#e8f7d9" style="background:#e8f7d9"></div>
             <div class="color-swatch" data-color="#fdeff2" style="background:#fdeff2"></div>
-          </div>
-        </div>
-
-        <div>
-          <label style="font-weight:600;">Item Width (slots)</label>
-          <div style="display:flex; gap:8px; align-items:center; margin-top:6px;">
-            <button type="button" id="width-decrease" style="width:32px; height:32px; border:1px solid #ccc; border-radius:4px; cursor:pointer;">−</button>
-            <input type="number" id="item-width" min="1" max="10" value="1" style="width:60px; text-align:center; border:1px solid #ccc; border-radius:4px; padding:4px;" />
-            <button type="button" id="width-increase" style="width:32px; height:32px; border:1px solid #ccc; border-radius:4px; cursor:pointer;">+</button>
           </div>
         </div>
 

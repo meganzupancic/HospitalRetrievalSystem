@@ -237,15 +237,21 @@ body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
   display: flex;
   justify-content: center;
   align-items: center;
-  font-size: 12px;
+  font-size: 18px;
+  font-weight: 500;
   width: 100%;
   min-height: var(--rack-row-height);
   overflow: hidden;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  hyphens: auto;
+  padding: 4px;
+  text-align: center;
 }
 
 .slot.occupied {
   background: var(--occupied-bg);
-  color: white;
+  color: black;
 }
 
 .item-1 { background-color: #4caf50; }  /* green */

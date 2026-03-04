@@ -12,16 +12,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const addCustomBtn = document.getElementById('add-custom-tag');
   const otherNamesInput = document.getElementById('item-other-names');
   const swatches = Array.from(document.querySelectorAll('.color-swatch'));
-  const widthInput = document.getElementById('item-width');
-  const widthIncrease = document.getElementById('width-increase');
-  const widthDecrease = document.getElementById('width-decrease');
 
   // State
   let addMode = false;
   let selectedSlots = [];
   let selectedTags = [];
   let selectedColor = null;
-  let itemWidth = 1;
   const params = new URLSearchParams(window.location.search);
   let currentRackId = params.get('rack') || '1';
   
@@ -64,8 +60,6 @@ document.addEventListener('DOMContentLoaded', () => {
       otherNamesInput.value = '';
       swatches.forEach(s => s.classList.remove('selected'));
       selectedColor = null;
-      itemWidth = 1;
-      if (widthInput) widthInput.value = '1';
       form.style.display = 'none';
     } else {
       form.style.display = 'block';
@@ -74,7 +68,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (swatches.length) {
         selectSwatch(swatches[0]);
       }
-      if (widthInput && !widthInput.value) widthInput.value = '1';
     }
   }
 
@@ -88,7 +81,6 @@ document.addEventListener('DOMContentLoaded', () => {
         otherNames: otherNamesInput.value || '',
         selectedColor: selectedColor || null,
         selectedSlots: selectedSlots || [],
-        itemWidth: itemWidth || 1,
         rackId: currentRackId || null,
         ts: Date.now()
       };
@@ -111,10 +103,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (d.selectedColor) {
         const sw = swatches.find(s => s.dataset.color === d.selectedColor);
         if (sw) selectSwatch(sw); else selectedColor = d.selectedColor;
-      }
-      if (d.itemWidth && widthInput) {
-        widthInput.value = d.itemWidth;
-        itemWidth = d.itemWidth;
       }
       // restore selected slots only if those slot IDs exist on this page
       selectedSlots = Array.isArray(d.selectedSlots) ? d.selectedSlots.filter(id => slots.some(s => s.dataset.slotId === id)) : [];
@@ -201,6 +189,60 @@ document.addEventListener('DOMContentLoaded', () => {
   // Slot click behavior
   slots.forEach(slot => {
     slot.addEventListener('click', (e) => {
+      // Check if we're in edit item mode
+      const urlParams = new URLSearchParams(window.location.search);
+      const editMode = urlParams.get('edit');
+      
+      // If in edit item mode
+      if (editMode === 'item') {
+        // If slot is occupied, load item for editing
+        if (slot.classList.contains('occupied')) {
+          const itemId = slot.dataset.itemId;
+          if (!itemId) return;
+          
+          // Populate form with item data
+          nameInput.value = slot.dataset.label || '';
+          
+          // Parse and set tags
+          const tagsStr = slot.dataset.tags || '';
+          selectedTags = tagsStr.split(',').map(s => s.trim()).filter(Boolean);
+          renderSelectedTags();
+          
+          // Set other names
+          otherNamesInput.value = slot.dataset.otherNames || '';
+          
+          // Set color
+          const itemColor = slot.dataset.color;
+          const colorSwatch = swatches.find(sw => sw.dataset.color === itemColor);
+          if (colorSwatch) selectSwatch(colorSwatch);
+          else selectedColor = itemColor;
+          
+          // Show form
+          form.style.display = 'block';
+          
+          // Change save button to update mode
+          saveBtn.textContent = 'Update Item';
+          saveBtn.dataset.itemId = itemId;
+          saveBtn.dataset.editMode = 'true';
+          
+          return;
+        } else {
+          // If slot is empty and form is visible (item loaded for editing), allow selecting additional slots
+          if (form.style.display === 'block' && saveBtn.dataset.editMode === 'true') {
+            slot.classList.toggle('selected');
+            const id = slot.dataset.slotId;
+            if (!id) return;
+            if (slot.classList.contains('selected')) {
+              if (!selectedSlots.includes(id)) selectedSlots.push(id);
+            } else {
+              selectedSlots = selectedSlots.filter(sid => sid !== id);
+            }
+            saveDraft();
+            return;
+          }
+        }
+      }
+      
       // If in add mode, toggle selection (but prevent selecting occupied)
       if (addMode) {
         if (slot.classList.contains('occupied')) return;
@@ -222,11 +264,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Populate header fields (in templates/base.html)
       const headerName = document.getElementById('item-name-value');
-      const headerLocation = document.getElementById('location-value');
       const headerTags = document.getElementById('tags-value');
       const headerOther = document.getElementById('other-names-value');
       if (headerName) headerName.textContent = slot.dataset.label || 'Unnamed Item';
-      if (headerLocation) headerLocation.textContent = slot.dataset.location || slot.dataset.slotId || 'N/A';
       if (headerTags) {
         headerTags.innerHTML = '';
         const hdrTags = (slot.dataset.tags || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -279,35 +319,65 @@ document.addEventListener('DOMContentLoaded', () => {
       nameInput.focus();
       return;
     }
-    if (selectedSlots.length === 0) {
+    
+    const isEditMode = saveBtn.dataset.editMode === 'true';
+    const itemId = saveBtn.dataset.itemId;
+    
+    // For edit mode, slots are optional (can just update properties)
+    // For add mode, at least one slot is required
+    if (!isEditMode && selectedSlots.length === 0) {
       alert('Please select at least one location on the rack.');
       return;
     }
+    
     const otherRaw = (otherNamesInput.value || '').trim();
     const otherArr = otherRaw ? otherRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
 
     try {
-      const res = await fetch('/place', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          slot_ids: selectedSlots,
-          rack_id: currentRackId,
-          label: label,
-          tags: selectedTags,
-          other_names: otherArr,
-          color: selectedColor,
-          width: itemWidth || 1
-        })
-      });
+      let res;
+      
+      if (isEditMode && itemId) {
+        // Update existing item
+        res = await fetch(`/items/${itemId}/update`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            label: label,
+            tags: selectedTags,
+            other_names: otherArr,
+            color: selectedColor,
+            additional_slots: selectedSlots,  // Add to more slots if selected
+            rack_id: currentRackId
+          })
+        });
+      } else {
+        // Create and place new item
+        res = await fetch('/place', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            slot_ids: selectedSlots,
+            rack_id: currentRackId,
+            label: label,
+            tags: selectedTags,
+            other_names: otherArr,
+            color: selectedColor
+          })
+        });
+      }
+      
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        alert(err.error || 'Failed to place item');
+        alert(err.error || `Failed to ${isEditMode ? 'update' : 'place'} item`);
         return;
       }
       await res.json();
       // clear draft then refresh to show changes
       clearDraft();
+      // Reset save button state
+      saveBtn.textContent = 'Save Item';
+      delete saveBtn.dataset.editMode;
+      delete saveBtn.dataset.itemId;
       window.location.reload();
     } catch (err) {
       console.error(err);
@@ -315,8 +385,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Cancel add
-  cancelBtn.addEventListener('click', () => { clearDraft(); setAddMode(false); });
+  // Cancel add/edit
+  cancelBtn.addEventListener('click', () => { 
+    clearDraft(); 
+    setAddMode(false);
+    // Reset save button state
+    saveBtn.textContent = 'Save Item';
+    delete saveBtn.dataset.editMode;
+    delete saveBtn.dataset.itemId;
+  });
 
   // Add button toggles add mode
   addBtn.addEventListener('click', () => { setAddMode(true); saveDraft(); });
@@ -339,7 +416,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Rack buttons preserve edit param and load rack's saved config
   const rackBtns = document.querySelectorAll('.rack-btn');
-  console.log(`[Rack Buttons Found] Count: ${rackBtns.length}`);
   rackBtns.forEach(b => b.addEventListener('click', () => {
     const rackId = b.dataset.rack;
     // save draft so entries persist when navigating to another rack
@@ -348,22 +424,49 @@ document.addEventListener('DOMContentLoaded', () => {
     params.set('rack', rackId);
     // Load this rack's saved config from localStorage, or fall back to current
     const savedRackConfig = getSavedConfig(rackId);
-    const configToUse = savedRackConfig || currentConfig
-    // preserve edit
+    const configToUse = savedRackConfig || currentConfig;
+    params.set('config', configToUse);
+    // preserve edit mode if active
+    const currentMode = params.get('edit');
+    if (currentMode) params.set('edit', currentMode);
     const qs = params.toString();
     window.location = `/?${qs}`;
   }));
 
-  // Edit mode button
-  const editBtn = document.getElementById('edit-mode-btn');
-  if (editBtn) {
-    editBtn.addEventListener('click', () => {
+  // Remove Items button (shows delete buttons on items)
+  const removeItemsBtn = document.getElementById('remove-items-btn');
+  if (removeItemsBtn) {
+    removeItemsBtn.addEventListener('click', () => {
       const params = new URLSearchParams(window.location.search);
-      if (params.get('edit') === '1') params.delete('edit'); else params.set('edit', '1');
+      if (params.get('edit') === 'remove') params.delete('edit'); else params.set('edit', 'remove');
       const qs = params.toString();
       window.location = qs ? `/?${qs}` : '/';
     });
-    if (window.location.search.includes('edit=1')) editBtn.textContent = 'Exit Edit Mode'; else editBtn.textContent = 'Edit Mode';
+    if (window.location.search.includes('edit=remove')) {
+      removeItemsBtn.textContent = 'Exit Remove Mode';
+      removeItemsBtn.style.background = '#d9534f';
+      removeItemsBtn.style.color = 'white';
+    } else {
+      removeItemsBtn.textContent = 'Remove Items';
+    }
+  }
+
+  // Edit Item button (allows editing item properties)
+  const editItemBtn = document.getElementById('edit-item-btn');
+  if (editItemBtn) {
+    editItemBtn.addEventListener('click', () => {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('edit') === 'item') params.delete('edit'); else params.set('edit', 'item');
+      const qs = params.toString();
+      window.location = qs ? `/?${qs}` : '/';
+    });
+    if (window.location.search.includes('edit=item')) {
+      editItemBtn.textContent = 'Exit Edit Mode';
+      editItemBtn.style.background = '#5bc0de';
+      editItemBtn.style.color = 'white';
+    } else {
+      editItemBtn.textContent = 'Edit Item';
+    }
   }
 
   // Highlight current rack button
@@ -374,48 +477,9 @@ document.addEventListener('DOMContentLoaded', () => {
     sel.classList.add('active');
   }
 
-  // Width adjustment controls
-  if (widthIncrease) {
-    widthIncrease.addEventListener('click', () => {
-      const maxCols = currentConfig === '4x4' ? 4 : 6;
-      const currentVal = parseInt(widthInput.value) || 1;
-      if (currentVal < maxCols) {
-        widthInput.value = currentVal + 1;
-        itemWidth = currentVal + 1;
-        saveDraft();
-      }
-    });
-  }
-
-  if (widthDecrease) {
-    widthDecrease.addEventListener('click', () => {
-      const currentVal = parseInt(widthInput.value) || 1;
-      if (currentVal > 1) {
-        widthInput.value = currentVal - 1;
-        itemWidth = currentVal - 1;
-        saveDraft();
-      }
-    });
-  }
-
-  if (widthInput) {
-    widthInput.addEventListener('change', () => {
-      const maxCols = currentConfig === '4x4' ? 4 : 6;
-      let val = parseInt(widthInput.value) || 1;
-      if (val < 1) val = 1;
-      if (val > maxCols) val = maxCols;
-      widthInput.value = val;
-      itemWidth = val;
-      saveDraft();
-    });
-  }
-
   // Rack configuration buttons
   const configBtns = document.querySelectorAll('.config-btn');
-  console.log(`[Config Buttons Found] Count: ${configBtns.length}`);
   configBtns.forEach(b => b.addEventListener('click', () => {
-    const config = b.dataset.config;
-    cfigBtns.forEach(b => b.addEventListener('click', () => {
     const config = b.dataset.config;
     // Save config to localStorage for this rack so it persists
     setSavedConfig(currentRackId, config);
@@ -423,7 +487,10 @@ document.addEventListener('DOMContentLoaded', () => {
     saveDraft();
     const params = new URLSearchParams(window.location.search);
     params.set('config', config);
-    const qs = params.toString(
+    const qs = params.toString();
+    // Add small delay to ensure localStorage write completes before reload
+    setTimeout(() => {
+      window.location = `/?${qs}`;
     }, 50);
   }));
 

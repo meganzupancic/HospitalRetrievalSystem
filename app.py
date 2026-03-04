@@ -204,13 +204,15 @@ def rack_view():
     # Keep all slots, don't filter - group_slots will work with all 20 columns
     rows = group_slots(slots, cols=rack["cols"], rows=rack["rows"])
 
-    edit_mode = request.args.get("edit") == "1"
+    edit_mode = request.args.get("edit", "")  # 'remove', 'item', or empty
     return render_template(
         "rack.html",
         rack=rack,
         slots=slots,
         rows=rows,
         edit_mode=edit_mode,
+        remove_mode=(edit_mode == "remove"),
+        edit_item_mode=(edit_mode == "item"),
         cols=cols_to_display,  # only used for display limiting
         cols_full=rack["cols"],  # full 20 columns for slicing
         rows_count=rack["rows"],
@@ -254,6 +256,75 @@ def create_item():
             "tags": tags_csv,
             "other_names": other_csv,
             "color": color,
+        }
+    )
+
+
+@app.post("/items/<int:item_id>/update")
+def update_item(item_id):
+    """Update an existing item's properties and optionally add to more slots."""
+    data = request.json or {}
+    label = data.get("label")
+    tags = data.get("tags")
+    other_names = data.get("other_names")
+    color = data.get("color")
+    additional_slots = data.get("additional_slots", [])  # New slots to add
+    rack_id = data.get("rack_id")
+
+    if not label:
+        return jsonify({"error": "Label required"}), 400
+
+    # Normalize tags/other_names into comma-separated strings
+    def to_csv(v):
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return ",".join([str(x).strip() for x in v if str(x).strip()])
+        return str(v)
+
+    tags_csv = to_csv(tags)
+    other_csv = to_csv(other_names)
+
+    conn = get_conn()
+
+    # Check if item exists
+    existing = conn.execute("SELECT id FROM items WHERE id=?", (item_id,)).fetchone()
+    if not existing:
+        conn.close()
+        return jsonify({"error": "Item not found"}), 404
+
+    # Update item properties
+    conn.execute(
+        "UPDATE items SET label=?, tags=?, other_names=?, color=? WHERE id=?",
+        (label, tags_csv, other_csv, color, item_id),
+    )
+
+    # If additional slots provided, add item to those slots
+    if additional_slots and rack_id:
+        for slot_id in additional_slots:
+            # Check if this slot is already occupied
+            existing_placement = conn.execute(
+                "SELECT item_id FROM item_slots WHERE rack_id=? AND slot_id=?",
+                (rack_id, slot_id),
+            ).fetchone()
+
+            if not existing_placement:
+                conn.execute(
+                    "INSERT INTO item_slots(item_id, rack_id, slot_id) VALUES(?,?,?)",
+                    (item_id, rack_id, slot_id),
+                )
+
+    conn.commit()
+    conn.close()
+
+    return jsonify(
+        {
+            "item_id": item_id,
+            "label": label,
+            "tags": tags_csv,
+            "other_names": other_csv,
+            "color": color,
+            "slots_added": len(additional_slots),
         }
     )
 
