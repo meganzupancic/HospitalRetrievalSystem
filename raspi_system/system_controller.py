@@ -42,8 +42,13 @@ from raspi_system.vosk_wake_word import wake_word_listener
 # from socketio_instance import socketio
 
 
-def build_26bit_payload(slot_number=None, start_flag=False):
-    """Build 26-bit payload: bits 0-23 slots 1-24, bit 24 unused, bit 25 start.
+def build_26bit_payload(slot_number=None, start_flag=False, rack_config=None):
+    """Build 26-bit payload: bits 0-23 slots 1-24, bit 24 rack config, bit 25 start.
+
+    Args:
+        slot_number: slot to activate (1-24), None for no slot
+        start_flag: if True, set bit 25 (start signal)
+        rack_config: '4x4' or '6x4', determines bit 24 (0 for 4x4, 1 for 6x4)
 
     Returns 4 bytes (32 bits) in little-endian format.
     """
@@ -52,6 +57,10 @@ def build_26bit_payload(slot_number=None, start_flag=False):
     if slot_number is not None and 1 <= slot_number <= 24:
         bit_pattern |= 1 << (slot_number - 1)
 
+    # Bit 24: rack configuration (0 for 4x4, 1 for 6x4)
+    if rack_config == "6x4":
+        bit_pattern |= 1 << 24
+
     if start_flag:
         bit_pattern |= 1 << 25
 
@@ -59,6 +68,24 @@ def build_26bit_payload(slot_number=None, start_flag=False):
     bit_pattern &= 0x03FFFFFF
 
     return bit_pattern.to_bytes(4, byteorder="little")
+
+
+def get_rack_config(rack_number):
+    """Get rack configuration (4x4 or 6x4) for a specific rack."""
+    try:
+        from db import get_conn
+
+        conn = get_conn()
+        rack = conn.execute(
+            "SELECT cols FROM racks WHERE id=?", (rack_number,)
+        ).fetchone()
+        conn.close()
+        if rack:
+            cols = rack["cols"]
+            return "6x4" if cols == 6 else "4x4"
+    except Exception as e:
+        print(f"Error fetching rack config: {e}")
+    return "4x4"  # default to 4x4
 
 
 engine = pyttsx3.init()
@@ -333,10 +360,15 @@ def ble_worker_thread(rack_number):
                         try:
                             write_start = time.time()
 
+                            # Get rack configuration for this rack
+                            rack_config = get_rack_config(rack_number)
+
                             # Check if this is a wake word event or keyword event
                             if keyword == "wake_word_start":
                                 # Wake word event - set start bit (bit 25)
-                                payload = build_26bit_payload(start_flag=True)
+                                payload = build_26bit_payload(
+                                    start_flag=True, rack_config=rack_config
+                                )
                                 print(
                                     f"BLE Worker (Rack {rack_number}): Sending wake word payload: {payload.hex()}"
                                 )
@@ -349,7 +381,9 @@ def ble_worker_thread(rack_number):
                                 )
                             else:
                                 # Keyword event - set slot bit (0-23)
-                                payload = build_26bit_payload(slot_number=slot_number)
+                                payload = build_26bit_payload(
+                                    slot_number=slot_number, rack_config=rack_config
+                                )
                                 print(
                                     f"BLE Worker (Rack {rack_number}): Sending slot payload: {payload.hex()}"
                                 )

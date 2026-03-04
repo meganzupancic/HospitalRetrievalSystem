@@ -24,7 +24,32 @@ document.addEventListener('DOMContentLoaded', () => {
   let itemWidth = 1;
   const params = new URLSearchParams(window.location.search);
   let currentRackId = params.get('rack') || '1';
-  let currentConfig = params.get('config') || '4x4';
+  
+  // Helper to get per-rack config storage key
+  function getConfigStorageKey(rackId) {
+    return `rackConfig_v1_${rackId}`;
+  }
+  
+  // Safe localStorage get/set with error handling
+  function getSavedConfig(rackId) {
+    try {
+      return localStorage.getItem(getConfigStorageKey(rackId));
+    } catch (e) {
+      console.warn('localStorage.getItem failed:', e);
+      return null;
+    }
+  }
+  
+  function setSavedConfig(rackId, config) {
+    try {
+      localStorage.setItem(getConfigStorageKey(rackId), config);
+    } catch (e) {
+      console.warn('localStorage.setItem failed:', e);
+    }
+  }
+  
+  // Load config from localStorage for this rack, or use URL param, or default to 4x4
+  let currentConfig = getSavedConfig(currentRackId) || params.get('config') || '4x4';
 
   // Helpers
   function setAddMode(on) {
@@ -312,13 +337,18 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Rack buttons preserve edit param
-  document.querySelectorAll('.rack-btn').forEach(b => b.addEventListener('click', () => {
+  // Rack buttons preserve edit param and load rack's saved config
+  const rackBtns = document.querySelectorAll('.rack-btn');
+  console.log(`[Rack Buttons Found] Count: ${rackBtns.length}`);
+  rackBtns.forEach(b => b.addEventListener('click', () => {
     const rackId = b.dataset.rack;
     // save draft so entries persist when navigating to another rack
     saveDraft();
     const params = new URLSearchParams(window.location.search);
     params.set('rack', rackId);
+    // Load this rack's saved config from localStorage, or fall back to current
+    const savedRackConfig = getSavedConfig(rackId);
+    const configToUse = savedRackConfig || currentConfig
     // preserve edit
     const qs = params.toString();
     window.location = `/?${qs}`;
@@ -381,13 +411,20 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Rack configuration buttons
-  document.querySelectorAll('.config-btn').forEach(b => b.addEventListener('click', () => {
+  const configBtns = document.querySelectorAll('.config-btn');
+  console.log(`[Config Buttons Found] Count: ${configBtns.length}`);
+  configBtns.forEach(b => b.addEventListener('click', () => {
     const config = b.dataset.config;
+    cfigBtns.forEach(b => b.addEventListener('click', () => {
+    const config = b.dataset.config;
+    // Save config to localStorage for this rack so it persists
+    setSavedConfig(currentRackId, config);
+    currentConfig = config;
     saveDraft();
     const params = new URLSearchParams(window.location.search);
     params.set('config', config);
-    const qs = params.toString();
-    window.location = `/?${qs}`;
+    const qs = params.toString(
+    }, 50);
   }));
 
   // Highlight current config button
