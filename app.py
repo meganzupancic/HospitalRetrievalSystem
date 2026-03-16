@@ -1,4 +1,7 @@
 # app.py
+import hashlib
+import json
+
 from flask import Flask, jsonify, render_template, request
 
 from db import get_conn, init_db
@@ -7,7 +10,36 @@ app = Flask(__name__)
 
 init_db()
 
-import hashlib
+
+# ---------------------------------------------------------------------------
+# Logging helper
+# ---------------------------------------------------------------------------
+# Categories: "connection", "database", "login", "system"
+
+
+def log_event(category: str, action: str, detail=None):
+    """Write one row to system_logs.
+
+    detail can be a plain string or a dict – dicts are serialised as JSON so
+    the frontend can render structured before/after info.
+    """
+    try:
+        if isinstance(detail, dict):
+            detail_str = json.dumps(detail)
+        else:
+            detail_str = detail
+        conn = get_conn()
+        conn.execute(
+            "INSERT INTO system_logs(category, action, detail) VALUES(?,?,?)",
+            (category, action, detail_str),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+log_event("system", "Server started", {"message": "Flask app initialised"})
 
 
 def color_for_item(label):
@@ -254,6 +286,17 @@ def create_item():
     item_id = cur.lastrowid
     conn.commit()
     conn.close()
+    log_event(
+        "database",
+        "Item created",
+        {
+            "item_id": item_id,
+            "name": label,
+            "tags": tags_csv or "",
+            "other_names": other_csv or "",
+            "color": color or "",
+        },
+    )
     return jsonify(
         {
             "item_id": item_id,
@@ -292,11 +335,20 @@ def update_item(item_id):
 
     conn = get_conn()
 
-    # Check if item exists
-    existing = conn.execute("SELECT id FROM items WHERE id=?", (item_id,)).fetchone()
+    # Check if item exists and capture before-state for the log
+    existing = conn.execute(
+        "SELECT label, tags, other_names, color FROM items WHERE id=?", (item_id,)
+    ).fetchone()
     if not existing:
         conn.close()
         return jsonify({"error": "Item not found"}), 404
+
+    before_state = {
+        "name": existing["label"] or "",
+        "tags": existing["tags"] or "",
+        "other_names": existing["other_names"] or "",
+        "color": existing["color"] or "",
+    }
 
     # Update item properties
     conn.execute(
@@ -321,7 +373,23 @@ def update_item(item_id):
 
     conn.commit()
     conn.close()
-
+    after_state = {
+        "name": label,
+        "tags": tags_csv or "",
+        "other_names": other_csv or "",
+        "color": color or "",
+    }
+    log_event(
+        "database",
+        "Item updated",
+        {
+            "item_id": item_id,
+            "before": before_state,
+            "after": after_state,
+            "slots_added": additional_slots,
+            "rack_id": rack_id,
+        },
+    )
     return jsonify(
         {
             "item_id": item_id,
@@ -413,9 +481,29 @@ def place_item():
             (item_id, sid, label, rack_id, tags_csv, other_csv),
         )
 
+    # Resolve rack name for the log
+    log_conn = get_conn()
+    rack_row = log_conn.execute(
+        "SELECT name FROM racks WHERE id=?", (rack_id,)
+    ).fetchone()
+    log_conn.close()
+    rack_name = rack_row["name"] if rack_row else f"Rack {rack_id}"
+
     conn.commit()
     conn.close()
-
+    log_event(
+        "database",
+        "Item placed",
+        {
+            "item_id": item_id,
+            "name": label,
+            "rack_id": rack_id,
+            "rack_name": rack_name,
+            "slot_ids": slot_ids,
+            "tags": tags_csv or "",
+            "other_names": other_csv or "",
+        },
+    )
     return jsonify(
         {
             "success": True,
@@ -432,14 +520,41 @@ def remove_item():
     item_id = request.json.get("item_id")
     slot_id = request.json.get("slot_id")
     conn = get_conn()
+    # Fetch label for log before deleting
+    row = conn.execute(
+        "SELECT i.label, GROUP_CONCAT(DISTINCT r.name) AS rack_names, GROUP_CONCAT(DISTINCT islots.slot_id) AS slot_ids"
+        " FROM items i"
+        " LEFT JOIN item_slots islots ON islots.item_id = i.id"
+        " LEFT JOIN racks r ON r.id = islots.rack_id"
+        " WHERE i.id=?",
+        (item_id,),
+    ).fetchone()
+    item_label = row["label"] if row else str(item_id)
+    rack_names = row["rack_names"] if row else ""
+    all_slot_ids = row["slot_ids"] if row else ""
     if slot_id:
         conn.execute(
             "DELETE FROM item_slots WHERE item_id=? AND slot_id=?", (item_id, slot_id)
         )
+        log_detail = {
+            "item_id": item_id,
+            "name": item_label,
+            "scope": "single slot",
+            "slot_id": slot_id,
+            "racks": rack_names,
+        }
     else:
         conn.execute("DELETE FROM item_slots WHERE item_id=?", (item_id,))
+        log_detail = {
+            "item_id": item_id,
+            "name": item_label,
+            "scope": "all slots",
+            "slot_ids": all_slot_ids,
+            "racks": rack_names,
+        }
     conn.commit()
     conn.close()
+    log_event("database", "Item removed", log_detail)
     return jsonify({"ok": True})
 
 
@@ -502,6 +617,25 @@ def update_rack_status():
     ):
         return jsonify({"error": "Invalid rack_id or status"}), 400
     _rack_status[rack_id] = status
+    action_label = {
+        "connected": "Rack connected",
+        "disconnected": "Rack disconnected",
+        "reconnecting": "Rack reconnecting",
+    }.get(status, status)
+    # Resolve rack name
+    _rc = get_conn()
+    _rr = _rc.execute("SELECT name FROM racks WHERE id=?", (rack_id,)).fetchone()
+    _rc.close()
+    rack_name = _rr["name"] if _rr else f"Rack {rack_id}"
+    log_event(
+        "connection",
+        action_label,
+        {
+            "rack_id": rack_id,
+            "rack_name": rack_name,
+            "status": status,
+        },
+    )
     return jsonify({"ok": True})
 
 
@@ -515,29 +649,89 @@ def update_rack_config(rack_id):
         return jsonify({"error": "Invalid config. Must be '4x4' or '6x4'"}), 400
 
     conn = get_conn()
-    rack = conn.execute("SELECT id FROM racks WHERE id=?", (rack_id,)).fetchone()
+    rack = conn.execute(
+        "SELECT id, name, config FROM racks WHERE id=?", (rack_id,)
+    ).fetchone()
     if not rack:
         conn.close()
         return jsonify({"error": f"Rack {rack_id} not found"}), 404
 
+    old_config = rack["config"] or "4x4"
+    rack_name = rack["name"]
     conn.execute("UPDATE racks SET config = ? WHERE id = ?", (config, rack_id))
     conn.commit()
     conn.close()
-
+    log_event(
+        "database",
+        "Rack config updated",
+        {
+            "rack_id": rack_id,
+            "rack_name": rack_name,
+            "before": old_config,
+            "after": config,
+        },
+    )
     return jsonify({"success": True, "config": config})
 
 
 @app.route("/logs")
 def view_logs():
     """Page for viewing system logs"""
-    # TODO: Implement log viewing functionality
+    log_event("login", "Logs page viewed", None)
     return render_template("logs.html")
+
+
+@app.get("/api/logs")
+def api_logs():
+    """Return log entries filtered by category and time window."""
+    category = request.args.get(
+        "category", "all"
+    )  # all|connection|database|login|system
+    hours = request.args.get("hours", "24")  # 1|6|24|168|0 (0=all time)
+    limit = int(request.args.get("limit", "500"))
+
+    conn = get_conn()
+    params = []
+    where_clauses = []
+
+    try:
+        hours_int = int(hours)
+    except ValueError:
+        hours_int = 24
+
+    if hours_int > 0:
+        where_clauses.append("timestamp >= datetime('now', ? || ' hours')")
+        params.append(f"-{hours_int}")
+
+    if category != "all":
+        where_clauses.append("category = ?")
+        params.append(category)
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    params.append(limit)
+
+    rows = conn.execute(
+        f"SELECT id, timestamp, category, action, detail FROM system_logs {where_sql} ORDER BY id DESC LIMIT ?",
+        params,
+    ).fetchall()
+    conn.close()
+
+    out = []
+    for r in rows:
+        entry = dict(r)
+        if entry.get("detail"):
+            try:
+                entry["detail"] = json.loads(entry["detail"])
+            except (json.JSONDecodeError, TypeError):
+                pass  # leave as plain string
+        out.append(entry)
+    return jsonify(out)
 
 
 @app.route("/logout")
 def logout():
     """Handle user logout"""
-    # TODO: Implement actual logout if using authentication
+    log_event("login", "User logged out", None)
     return render_template("logout.html")
 
 

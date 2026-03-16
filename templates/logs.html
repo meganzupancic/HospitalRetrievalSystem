@@ -1,24 +1,588 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 
 {% block content %}
-<div style="margin-top: 100px; padding: 20px;">
-  <h1 style="font-size: 24px; font-weight: 600; margin-bottom: 20px;">System Logs</h1>
-  
-  <div style="background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-    <div style="background: #f5f5f5; border-radius: 4px; padding: 16px; font-family: monospace; font-size: 13px; max-height: 500px; overflow-y: auto;">
-      <div style="color: #666; margin-bottom: 8px;">[2026-03-04 10:23:45] System initialized</div>
-      <div style="color: #666; margin-bottom: 8px;">[2026-03-04 10:23:46] Database connected</div>
-      <div style="color: #4caf50; margin-bottom: 8px;">[2026-03-04 10:23:47] Flask server started on 0.0.0.0:5000</div>
-      <div style="color: #666; margin-bottom: 8px;">[2026-03-04 10:24:12] User accessed rack 1</div>
-      <div style="color: #666; margin-bottom: 8px;">[2026-03-04 10:25:33] Item added to slot 15</div>
-      <div style="color: #666; margin-bottom: 8px;">[2026-03-04 10:26:01] Arduino payload sent: 26 bits</div>
-      <div style="color: #2196f3; margin-bottom: 8px;">[2026-03-04 10:27:15] Rack configuration updated: 6x4</div>
-    </div>
-    
-    <div style="margin-top: 16px; display: flex; gap: 12px;">
-      <button style="padding: 8px 16px; background: #004e89; color: white; border: none; border-radius: 4px; cursor: pointer;">Refresh</button>
-      <button style="padding: 8px 16px; background: #f5f5f5; color: #333; border: none; border-radius: 4px; cursor: pointer;">Clear Logs</button>
+<style>
+  .logs-page {
+    margin-top: 90px;
+    padding: 20px 20px 48px;
+    max-width: 900px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .logs-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+
+  .logs-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: #1a1a2e;
+  }
+
+  .time-filters {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .time-pill {
+    padding: 5px 14px;
+    border-radius: 999px;
+    border: 1.5px solid #ccc;
+    background: #fff;
+    font-size: 13px;
+    font-weight: 500;
+    color: #555;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .time-pill:hover { border-color: #004e89; color: #004e89; }
+  .time-pill.active {
+    background: #004e89;
+    border-color: #004e89;
+    color: #fff;
+  }
+
+  .tab-bar {
+    display: flex;
+    gap: 4px;
+    border-bottom: 2px solid #e0e0e0;
+    margin-bottom: 16px;
+    overflow-x: auto;
+  }
+
+  .tab-btn {
+    padding: 9px 18px;
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #777;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .tab-btn:hover { color: #004e89; }
+  .tab-btn.active { color: #004e89; border-bottom-color: #004e89; }
+
+  .log-list {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    overflow: hidden;
+  }
+
+  .log-entry {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 12px 18px;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+
+  .log-entry:last-child { border-bottom: none; }
+  .log-entry:hover { background: #f7f9fc; }
+
+  .log-badge {
+    flex-shrink: 0;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-top: 1px;
+  }
+
+  .badge-connection { background: #e3f2fd; color: #1565c0; }
+  .badge-database   { background: #e8f5e9; color: #2e7d32; }
+  .badge-login      { background: #fff3e0; color: #e65100; }
+  .badge-system     { background: #f3e5f5; color: #6a1b9a; }
+
+  .log-body { flex: 1; min-width: 0; }
+
+  .log-action { font-weight: 600; color: #1a1a2e; }
+
+  .log-summary {
+    color: #666;
+    font-size: 13px;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .log-time {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: #999;
+    white-space: nowrap;
+    padding-top: 2px;
+  }
+
+  .log-chevron {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: #bbb;
+    padding-top: 3px;
+  }
+
+  .log-empty {
+    padding: 40px;
+    text-align: center;
+    color: #aaa;
+    font-size: 15px;
+  }
+
+  .logs-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 14px;
+    font-size: 13px;
+    color: #888;
+  }
+
+  .refresh-btn {
+    padding: 7px 18px;
+    background: #004e89;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .refresh-btn:hover { background: #003a66; }
+
+  /* â”€â”€ Modal â”€â”€ */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    backdrop-filter: blur(3px);
+    z-index: 2000;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+
+  .modal-overlay.open { display: flex; }
+
+  .modal-box {
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+    width: 100%;
+    max-width: 560px;
+    max-height: 85vh;
+    overflow-y: auto;
+    animation: modal-in 0.18s ease;
+  }
+
+  @keyframes modal-in {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 22px 14px;
+    border-bottom: 1px solid #f0f0f0;
+    position: sticky;
+    top: 0;
+    background: #fff;
+    z-index: 1;
+  }
+
+  .modal-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #1a1a2e;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .modal-close {
+    width: 30px;
+    height: 30px;
+    background: #f0f0f0;
+    border: none;
+    border-radius: 50%;
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #555;
+    transition: background 0.12s;
+    flex-shrink: 0;
+  }
+
+  .modal-close:hover { background: #e0e0e0; }
+
+  .modal-body { padding: 18px 22px 22px; }
+
+  .detail-meta {
+    font-size: 12px;
+    color: #999;
+    margin-bottom: 16px;
+  }
+
+  /* Diff rows */
+  .diff-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-bottom: 14px;
+  }
+
+  .diff-table th {
+    text-align: left;
+    padding: 5px 10px;
+    background: #f5f5f5;
+    font-weight: 600;
+    color: #555;
+    border-radius: 4px;
+  }
+
+  .diff-table td {
+    padding: 7px 10px;
+    vertical-align: top;
+    border-bottom: 1px solid #f0f0f0;
+  }
+
+  .diff-table tr:last-child td { border-bottom: none; }
+
+  .diff-field { color: #666; font-weight: 500; width: 110px; }
+
+  .diff-before {
+    color: #c0392b;
+    background: #fdf2f2;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-family: monospace;
+  }
+
+  .diff-after {
+    color: #27ae60;
+    background: #f0fdf4;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-family: monospace;
+  }
+
+  .diff-arrow { color: #bbb; padding: 0 6px; }
+
+  /* Info rows (not diff) */
+  .info-row {
+    display: flex;
+    gap: 10px;
+    font-size: 13px;
+    padding: 6px 0;
+    border-bottom: 1px solid #f5f5f5;
+  }
+
+  .info-row:last-child { border-bottom: none; }
+
+  .info-label {
+    width: 120px;
+    flex-shrink: 0;
+    color: #888;
+    font-weight: 500;
+  }
+
+  .info-value {
+    color: #1a1a2e;
+    word-break: break-word;
+  }
+
+  .plain-detail {
+    background: #f7f9fc;
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 13px;
+    color: #333;
+    word-break: break-word;
+  }
+</style>
+
+<div class="logs-page">
+  <div class="logs-header">
+    <span class="logs-title">System Logs</span>
+    <div class="time-filters" id="time-filters">
+      <button class="time-pill" data-hours="1">Last 1 hr</button>
+      <button class="time-pill" data-hours="6">Last 6 hrs</button>
+      <button class="time-pill active" data-hours="24">Last 24 hrs</button>
+      <button class="time-pill" data-hours="168">Last 7 days</button>
+      <button class="time-pill" data-hours="0">All time</button>
     </div>
   </div>
+
+  <div class="tab-bar" id="tab-bar">
+    <button class="tab-btn active" data-category="all">All</button>
+    <button class="tab-btn" data-category="connection">Connection</button>
+    <button class="tab-btn" data-category="database">Database</button>
+    <button class="tab-btn" data-category="login">Login</button>
+    <button class="tab-btn" data-category="system">System</button>
+  </div>
+
+  <div class="log-list" id="log-list">
+    <div class="log-empty">Loading&hellip;</div>
+  </div>
+
+  <div class="logs-footer">
+    <span id="log-count"></span>
+    <button class="refresh-btn" id="refresh-btn">Refresh</button>
+  </div>
 </div>
+
+<!-- Detail modal -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal-box" id="modal-box">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title">Log Detail</div>
+      <button class="modal-close" id="modal-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+  let currentCategory = "all";
+  let currentHours    = "24";
+
+  const BADGE_CLASS = {
+    connection: "badge-connection",
+    database:   "badge-database",
+    login:      "badge-login",
+    system:     "badge-system",
+  };
+
+  function escHtml(str) {
+    return String(str ?? "")
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function formatTime(iso) {
+    try {
+      const d = new Date(iso.endsWith("Z") ? iso : iso + "Z");
+      return d.toLocaleString(undefined, {
+        month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit", second: "2-digit",
+      });
+    } catch { return iso; }
+  }
+
+  /** One-line summary shown in the list row */
+  function summaryText(action, detail) {
+    if (!detail) return "";
+    if (typeof detail === "string") return detail;
+    const d = detail;
+    if (d.name)       return d.name;
+    if (d.rack_name)  return d.rack_name;
+    if (d.message)    return d.message;
+    return "";
+  }
+
+  // â”€â”€ Modal rendering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  function infoRow(label, value) {
+    if (!value && value !== 0) return "";
+    return `<div class="info-row">
+      <span class="info-label">${escHtml(label)}</span>
+      <span class="info-value">${escHtml(value)}</span>
+    </div>`;
+  }
+
+  function diffRow(field, before, after) {
+    const changed = before !== after;
+    return `<tr>
+      <td class="diff-field">${escHtml(field)}</td>
+      <td>${changed ? `<span class="diff-before">${escHtml(before || "â€”")}</span>` : escHtml(before || "â€”")}</td>
+      <td class="diff-arrow">${changed ? "â†’" : ""}</td>
+      <td>${changed ? `<span class="diff-after">${escHtml(after || "â€”")}</span>` : ""}</td>
+    </tr>`;
+  }
+
+  function renderDetail(action, detail, timestamp) {
+    const meta = `<div class="detail-meta">Logged at ${escHtml(formatTime(timestamp))}</div>`;
+
+    if (!detail) return meta + `<div class="plain-detail">No additional information recorded.</div>`;
+
+    if (typeof detail === "string") return meta + `<div class="plain-detail">${escHtml(detail)}</div>`;
+
+    const d = detail;
+
+    // â”€â”€ Item updated: show before/after diff â”€â”€
+    if (d.before && d.after) {
+      const fields  = ["name", "tags", "other_names", "color"];
+      const labels  = { name: "Name", tags: "Tags", other_names: "Other names", color: "Color" };
+      const diffRows = fields.map(f => diffRow(labels[f], d.before[f], d.after[f])).join("");
+      const slotInfo = (d.slots_added && d.slots_added.length)
+        ? infoRow("Slots added", d.slots_added.join(", ") + (d.rack_id ? ` (Rack ${d.rack_id})` : ""))
+        : "";
+      return meta
+        + `<table class="diff-table">
+             <thead><tr><th>Field</th><th>Before</th><th></th><th>After</th></tr></thead>
+             <tbody>${diffRows}</tbody>
+           </table>`
+        + slotInfo;
+    }
+
+    // â”€â”€ Item created / placed â”€â”€
+    if (action === "Item created" || action === "Item placed") {
+      return meta
+        + infoRow("Name",       d.name)
+        + infoRow("Item ID",    d.item_id)
+        + infoRow("Rack",       d.rack_name || (d.rack_id ? `Rack ${d.rack_id}` : null))
+        + infoRow("Slots",      Array.isArray(d.slot_ids) ? d.slot_ids.join(", ") : d.slot_ids)
+        + infoRow("Tags",       d.tags)
+        + infoRow("Other names", d.other_names)
+        + infoRow("Color",      d.color);
+    }
+
+    // â”€â”€ Item removed â”€â”€
+    if (action === "Item removed") {
+      return meta
+        + infoRow("Name",    d.name)
+        + infoRow("Item ID", d.item_id)
+        + infoRow("Scope",   d.scope)
+        + infoRow("Rack(s)", d.racks)
+        + infoRow("Slot ID",  d.slot_id)
+        + infoRow("All slots", d.slot_ids);
+    }
+
+    // â”€â”€ Rack config updated â”€â”€
+    if (action === "Rack config updated") {
+      return meta
+        + infoRow("Rack",   d.rack_name || `Rack ${d.rack_id}`)
+        + `<table class="diff-table" style="margin-top:10px">
+             <thead><tr><th>Field</th><th>Before</th><th></th><th>After</th></tr></thead>
+             <tbody>${diffRow("Config", d.before, d.after)}</tbody>
+           </table>`;
+    }
+
+    // â”€â”€ Connection events â”€â”€
+    if (d.rack_name || d.rack_id) {
+      return meta
+        + infoRow("Rack",   d.rack_name || `Rack ${d.rack_id}`)
+        + infoRow("Status", d.status);
+    }
+
+    // â”€â”€ Fallback: render all keys â”€â”€
+    const rows = Object.entries(d)
+      .filter(([, v]) => v !== null && v !== undefined && v !== "")
+      .map(([k, v]) => infoRow(k.replace(/_/g, " "), Array.isArray(v) ? v.join(", ") : v))
+      .join("");
+    return meta + (rows || `<div class="plain-detail">${escHtml(JSON.stringify(d, null, 2))}</div>`);
+  }
+
+  // â”€â”€ Modal open/close â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const overlay = document.getElementById("modal-overlay");
+  const modalTitle = document.getElementById("modal-title");
+  const modalBody  = document.getElementById("modal-body");
+
+  function openModal(entry) {
+    const badgeCls = BADGE_CLASS[entry.category] || "badge-system";
+    modalTitle.innerHTML =
+      `<span class="log-badge ${badgeCls}">${escHtml(entry.category)}</span>` +
+      escHtml(entry.action);
+    modalBody.innerHTML  = renderDetail(entry.action, entry.detail, entry.timestamp);
+    overlay.classList.add("open");
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeModal() {
+    overlay.classList.remove("open");
+    document.body.style.overflow = "";
+  }
+
+  document.getElementById("modal-close").addEventListener("click", closeModal);
+  overlay.addEventListener("click", e => { if (e.target === overlay) closeModal(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+  // â”€â”€ Log list rendering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  async function loadLogs() {
+    const list = document.getElementById("log-list");
+    list.innerHTML = '<div class="log-empty">Loading\u2026</div>';
+
+    const params = new URLSearchParams({ category: currentCategory, hours: currentHours });
+    const res  = await fetch("/api/logs?" + params);
+    const logs = await res.json();
+
+    if (!logs.length) {
+      list.innerHTML = '<div class="log-empty">No log entries found for this filter.</div>';
+      document.getElementById("log-count").textContent = "";
+      return;
+    }
+
+    list.innerHTML = "";
+    logs.forEach(entry => {
+      const badgeCls = BADGE_CLASS[entry.category] || "badge-system";
+      const summary  = summaryText(entry.action, entry.detail);
+      const el = document.createElement("div");
+      el.className = "log-entry";
+      el.innerHTML = `
+        <span class="log-badge ${badgeCls}">${escHtml(entry.category)}</span>
+        <div class="log-body">
+          <div class="log-action">${escHtml(entry.action)}</div>
+          ${summary ? `<div class="log-summary">${escHtml(summary)}</div>` : ""}
+        </div>
+        <span class="log-time">${formatTime(entry.timestamp)}</span>
+        <span class="log-chevron">â€º</span>`;
+      el.addEventListener("click", () => openModal(entry));
+      list.appendChild(el);
+    });
+
+    document.getElementById("log-count").textContent =
+      logs.length === 500
+        ? "Showing latest 500 entries"
+        : `${logs.length} entr${logs.length === 1 ? "y" : "ies"}`;
+  }
+
+  // Tab clicks
+  document.getElementById("tab-bar").addEventListener("click", e => {
+    const btn = e.target.closest(".tab-btn");
+    if (!btn) return;
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    currentCategory = btn.dataset.category;
+    loadLogs();
+  });
+
+  // Time pill clicks
+  document.getElementById("time-filters").addEventListener("click", e => {
+    const pill = e.target.closest(".time-pill");
+    if (!pill) return;
+    document.querySelectorAll(".time-pill").forEach(p => p.classList.remove("active"));
+    pill.classList.add("active");
+    currentHours = pill.dataset.hours;
+    loadLogs();
+  });
+
+  document.getElementById("refresh-btn").addEventListener("click", loadLogs);
+
+  loadLogs();
+  setInterval(loadLogs, 30000);
+</script>
 {% endblock %}

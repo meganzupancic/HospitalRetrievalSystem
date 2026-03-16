@@ -105,3 +105,18 @@ def init_db():
                             (rack["id"], row, col),
                         )
                 conn.commit()
+
+    # Create system_logs table if not exists
+    with get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS system_logs (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                category  TEXT    NOT NULL,
+                action    TEXT    NOT NULL,
+                detail    TEXT
+            );
+        """
+        )
+        conn.commit()
