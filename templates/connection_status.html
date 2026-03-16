@@ -1,33 +1,196 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div style="margin-top: 100px; padding: 20px;">
-  <h1 style="font-size: 24px; font-weight: 600; margin-bottom: 20px;">Connection Status</h1>
-  
-  <div style="background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-    <div style="margin-bottom: 24px;">
-      <h2 style="font-size: 18px; margin-bottom: 12px;">Arduino BLE Connection</h2>
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <div style="width: 12px; height: 12px; border-radius: 50%; background: #4caf50;"></div>
-        <span style="color: #4caf50; font-weight: 500;">Connected</span>
+<style>
+  .cs-page {
+    margin-top: 100px;
+    padding: 24px 20px 40px;
+    max-width: 640px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .cs-title {
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 24px;
+    color: #1a1a2e;
+  }
+
+  .rack-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 36px;
+  }
+
+  .rack-card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 20px 18px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.10);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .status-dot {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .status-dot.connected {
+    background: #2ecc71;
+    box-shadow: 0 0 6px #2ecc71aa;
+  }
+
+  .status-dot.disconnected {
+    background: #e74c3c;
+    box-shadow: 0 0 6px #e74c3caa;
+  }
+
+  .status-dot.reconnecting {
+    background: #e74c3c;
+    box-shadow: 0 0 6px #e74c3caa;
+    animation: blink-red 0.8s ease-in-out infinite;
+  }
+
+  @keyframes blink-red {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.15; }
+  }
+
+  .rack-info {
+    flex: 1;
+  }
+
+  .rack-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: #1a1a2e;
+    margin-bottom: 2px;
+  }
+
+  .rack-status-text {
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .rack-status-text.connected    { color: #27ae60; }
+  .rack-status-text.disconnected { color: #c0392b; }
+  .rack-status-text.reconnecting { color: #c0392b; }
+
+  /* Legend */
+  .legend {
+    background: #fff;
+    border-radius: 12px;
+    padding: 16px 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .legend-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #555;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+  }
+
+  .legend-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+    color: #333;
+  }
+
+  /* Static dots used in legend */
+  .legend-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .legend-dot.connected    { background: #2ecc71; box-shadow: 0 0 5px #2ecc71aa; }
+  .legend-dot.disconnected { background: #e74c3c; box-shadow: 0 0 5px #e74c3caa; }
+  .legend-dot.reconnecting {
+    background: #e74c3c;
+    box-shadow: 0 0 5px #e74c3caa;
+    animation: blink-red 0.8s ease-in-out infinite;
+  }
+</style>
+
+<div class="cs-page">
+  <h1 class="cs-title">Connection Status</h1>
+
+  <div class="rack-grid" id="rack-grid">
+    {% for rack in racks %}
+    <div class="rack-card" id="rack-card-{{ rack.id }}">
+      <div class="status-dot disconnected" id="dot-{{ rack.id }}"></div>
+      <div class="rack-info">
+        <div class="rack-name">{{ rack.name }}</div>
+        <div class="rack-status-text disconnected" id="status-text-{{ rack.id }}">Disconnected</div>
       </div>
     </div>
-    
-    <div style="margin-bottom: 24px;">
-      <h2 style="font-size: 18px; margin-bottom: 12px;">Database Status</h2>
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <div style="width: 12px; height: 12px; border-radius: 50%; background: #4caf50;"></div>
-        <span style="color: #4caf50; font-weight: 500;">Connected</span>
-      </div>
+    {% endfor %}
+  </div>
+
+  <!-- Key -->
+  <div class="legend">
+    <div class="legend-title">Key</div>
+    <div class="legend-row">
+      <div class="legend-dot connected"></div>
+      <span>Connected</span>
     </div>
-    
-    <div>
-      <h2 style="font-size: 18px; margin-bottom: 12px;">System Information</h2>
-      <div style="color: #666;">
-        <p>Server: Flask Development Server</p>
-        <p>Host: 0.0.0.0:5000</p>
-      </div>
+    <div class="legend-row">
+      <div class="legend-dot disconnected"></div>
+      <span>Disconnected</span>
+    </div>
+    <div class="legend-row">
+      <div class="legend-dot reconnecting"></div>
+      <span>Reconnecting&hellip;</span>
     </div>
   </div>
 </div>
+
+<script>
+  const LABEL_MAP = {
+    connected:    "Connected",
+    disconnected: "Disconnected",
+    reconnecting: "Reconnecting\u2026",
+  };
+
+  function applyStatus(rackId, status) {
+    const dot  = document.getElementById("dot-" + rackId);
+    const text = document.getElementById("status-text-" + rackId);
+    if (!dot || !text) return;
+    dot.className  = "status-dot " + status;
+    text.className = "rack-status-text " + status;
+    text.textContent = LABEL_MAP[status] || status;
+  }
+
+  async function refreshStatus() {
+    try {
+      const res  = await fetch("/api/rack-status");
+      const data = await res.json();
+      for (const [id, status] of Object.entries(data)) {
+        applyStatus(id, status);
+      }
+    } catch (e) {
+      // Network error — leave current state as-is
+    }
+  }
+
+  // Initial load + poll every 3 seconds
+  refreshStatus();
+  setInterval(refreshStatus, 3000);
+</script>
 {% endblock %}
+

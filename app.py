@@ -457,11 +457,52 @@ def edit_racks():
     return render_template("edit_racks.html", racks=rack_list)
 
 
+# In-memory rack connection status store.
+# Possible states: "connected", "disconnected", "reconnecting"
+_rack_status = {
+    1: "disconnected",
+    2: "disconnected",
+    3: "disconnected",
+    4: "disconnected",
+}
+
+
 @app.route("/connection-status")
 def connection_status():
     """Page showing Arduino/BLE connection status"""
-    # TODO: Implement actual connection status checking
-    return render_template("connection_status.html")
+    conn = get_conn()
+    racks = conn.execute("SELECT id, name FROM racks ORDER BY id LIMIT 4").fetchall()
+    conn.close()
+    rack_list = [dict(r) for r in racks]
+    # Pad to 4 racks in case DB has fewer
+    existing_ids = {r["id"] for r in rack_list}
+    for i in range(1, 5):
+        if i not in existing_ids:
+            rack_list.append({"id": i, "name": f"Rack {i}"})
+    rack_list.sort(key=lambda r: r["id"])
+    return render_template("connection_status.html", racks=rack_list)
+
+
+@app.get("/api/rack-status")
+def get_rack_status():
+    """Return BLE connection status for all 4 racks."""
+    return jsonify({str(k): v for k, v in _rack_status.items()})
+
+
+@app.post("/api/rack-status")
+def update_rack_status():
+    """Allow the raspi system to push rack connection state updates."""
+    data = request.get_json(force=True)
+    rack_id = data.get("rack_id")
+    status = data.get("status")
+    if rack_id not in (1, 2, 3, 4) or status not in (
+        "connected",
+        "disconnected",
+        "reconnecting",
+    ):
+        return jsonify({"error": "Invalid rack_id or status"}), 400
+    _rack_status[rack_id] = status
+    return jsonify({"ok": True})
 
 
 @app.post("/rack/<int:rack_id>/config")
