@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="margin-top: 100px; padding: 20px;">
+  <h1 style="font-size: 24px; font-weight: 600; margin-bottom: 20px;">Connection Status</h1>
+  
+  <div style="background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+    <div style="margin-bottom: 24px;">
+      <h2 style="font-size: 18px; margin-bottom: 12px;">Arduino BLE Connection</h2>
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="width: 12px; height: 12px; border-radius: 50%; background: #4caf50;"></div>
+        <span style="color: #4caf50; font-weight: 500;">Connected</span>
+      </div>
+    </div>
+    
+    <div style="margin-bottom: 24px;">
+      <h2 style="font-size: 18px; margin-bottom: 12px;">Database Status</h2>
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="width: 12px; height: 12px; border-radius: 50%; background: #4caf50;"></div>
+        <span style="color: #4caf50; font-weight: 500;">Connected</span>
+      </div>
+    </div>
+    
+    <div>
+      <h2 style="font-size: 18px; margin-bottom: 12px;">System Information</h2>
+      <div style="color: #666;">
+        <p>Server: Flask Development Server</p>
+        <p>Host: 0.0.0.0:5000</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

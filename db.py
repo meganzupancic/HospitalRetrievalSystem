@@ -61,6 +61,13 @@ def init_db():
         except sqlite3.OperationalError:
             pass
 
+    # Ensure racks table has config column
+    with get_conn() as conn:
+        try:
+            conn.execute("ALTER TABLE racks ADD COLUMN config TEXT DEFAULT '4x4';")
+        except sqlite3.OperationalError:
+            pass
+
     # Seed one rack if none exists
     with get_conn() as conn:
         r = conn.execute("SELECT COUNT(*) AS c FROM racks").fetchone()["c"]

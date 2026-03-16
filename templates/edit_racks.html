@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="margin-top: 100px; padding: 20px;">
+  <h1 style="font-size: 24px; font-weight: 600; margin-bottom: 20px;">Edit Racks</h1>
+  
+  <div style="background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+    <h2 style="font-size: 18px; margin-bottom: 16px;">Available Racks</h2>
+    
+    {% for rack in racks %}
+    <div style="padding: 12px; border: 1px solid #e0e0e0; border-radius: 6px; margin-bottom: 12px;">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <strong>Rack {{ rack.id }}</strong>
+          <span style="color: #666; font-size: 14px;">
+            {{ rack.config if rack.config else '4x4' }} configuration
+          </span>
+        </div>
+        <a href="/rack/{{ rack.id }}" style="padding: 8px 16px; background: #004e89; color: white; text-decoration: none; border-radius: 4px;">View</a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

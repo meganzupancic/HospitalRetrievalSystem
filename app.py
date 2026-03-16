@@ -189,8 +189,13 @@ def group_slots(slots, cols=20, rows=4):
 
 
 @app.get("/")
-def rack_view():
-    rack_id = int(request.args.get("rack", 1))  # default to rack 1
+def home():
+    """Homepage with welcome message"""
+    return render_template("home.html")
+
+
+@app.get("/rack/<int:rack_id>")
+def rack_view(rack_id=1):
     config = request.args.get("config", "4x4")  # default to 4x4
 
     # Parse config to determine number of columns to display
@@ -436,6 +441,63 @@ def remove_item():
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
+
+
+@app.route("/edit-racks")
+def edit_racks():
+    """Page for editing rack configurations"""
+    conn = get_conn()
+    racks = conn.execute("SELECT * FROM racks ORDER BY id").fetchall()
+    conn.close()
+    rack_list = [dict(r) for r in racks]
+    # Add default config if not set
+    for rack in rack_list:
+        if not rack.get("config"):
+            rack["config"] = "4x4"
+    return render_template("edit_racks.html", racks=rack_list)
+
+
+@app.route("/connection-status")
+def connection_status():
+    """Page showing Arduino/BLE connection status"""
+    # TODO: Implement actual connection status checking
+    return render_template("connection_status.html")
+
+
+@app.post("/rack/<int:rack_id>/config")
+def update_rack_config(rack_id):
+    """Update rack configuration (4x4 or 6x4)"""
+    data = request.get_json()
+    config = data.get("config")
+
+    if config not in ["4x4", "6x4"]:
+        return jsonify({"error": "Invalid config. Must be '4x4' or '6x4'"}), 400
+
+    conn = get_conn()
+    rack = conn.execute("SELECT id FROM racks WHERE id=?", (rack_id,)).fetchone()
+    if not rack:
+        conn.close()
+        return jsonify({"error": f"Rack {rack_id} not found"}), 404
+
+    conn.execute("UPDATE racks SET config = ? WHERE id = ?", (config, rack_id))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"success": True, "config": config})
+
+
+@app.route("/logs")
+def view_logs():
+    """Page for viewing system logs"""
+    # TODO: Implement log viewing functionality
+    return render_template("logs.html")
+
+
+@app.route("/logout")
+def logout():
+    """Handle user logout"""
+    # TODO: Implement actual logout if using authentication
+    return render_template("logout.html")
 
 
 if __name__ == "__main__":

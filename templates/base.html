@@ -7,28 +7,58 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
+  <!-- Hamburger menu -->
+  <button class="hamburger-menu" id="hamburger-menu" aria-label="Menu">
+    <span></span>
+    <span></span>
+    <span></span>
+  </button>
+
+  <!-- Side panel -->
+  <nav class="side-panel" id="side-panel">
+    <div class="side-panel-content">
+      <a href="/" class="side-panel-link">Home</a>
+      <a href="/edit-racks" class="side-panel-link">Edit Racks</a>
+      <a href="/connection-status" class="side-panel-link">View Connection Status</a>
+      <a href="/logs" class="side-panel-link">View Logs</a>
+      <div class="side-panel-spacer"></div>
+      <a href="/logout" class="side-panel-link logout-link">Logout</a>
+    </div>
+  </nav>
+
+  <!-- Blur overlay -->
+  <div class="blur-overlay" id="blur-overlay"></div>
+
   <!-- Top yellow bar -->
   <header class="top-bar">
     <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo" class="top-bar-image">
   </header>
 
-  <!-- Icon row under the bar -->
-  <div class="icon-row">
-    <img src="{{ url_for('static', filename='icons/clipboard.svg') }}" alt="Clipboard Icon" class="icon">
-    <span id="item-name-label" class="icon-label"><strong>Item Name:</strong> <span id="item-name-value"></span></span>
-  </div>
-  <div class="icon-row">
-    <img src="{{ url_for('static', filename='icons/tag.svg') }}" alt="Tag Icon" class="icon">
-    <span id="tags-label" class="icon-label"><strong>Tags:</strong> <span id="tags-value"></span></span>
-  </div>
-  <div class="icon-row">
-    <img src="{{ url_for('static', filename='icons/comment.svg') }}" alt="Comment Icon" class="icon">
-    <span id="other-names-label" class="icon-label"><strong>Other Names:</strong> <span id="other-names-value"></span></span>
-  </div>
-
   <!-- Main content -->
   <main>
     {% block content %}{% endblock %}
   </main>
+
+  <script>
+    // Menu toggle functionality
+    const hamburger = document.getElementById('hamburger-menu');
+    const sidePanel = document.getElementById('side-panel');
+    const blurOverlay = document.getElementById('blur-overlay');
+
+    function openMenu() {
+      sidePanel.classList.add('open');
+      blurOverlay.classList.add('active');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeMenu() {
+      sidePanel.classList.remove('open');
+      blurOverlay.classList.remove('active');
+      document.body.style.overflow = '';
+    }
+
+    hamburger.addEventListener('click', openMenu);
+    blurOverlay.addEventListener('click', closeMenu);
+  </script>
 </body>
 </html>

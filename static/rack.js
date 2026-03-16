@@ -19,7 +19,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let selectedTags = [];
   let selectedColor = null;
   const params = new URLSearchParams(window.location.search);
-  let currentRackId = params.get('rack') || '1';
+  // Extract rack ID from URL path (e.g., /rack/1 -> 1)
+  const pathParts = window.location.pathname.split('/');
+  let currentRackId = pathParts[pathParts.length - 1] || '1';
   
   // Helper to get per-rack config storage key
   function getConfigStorageKey(rackId) {
@@ -64,6 +66,10 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       form.style.display = 'block';
       nameInput.focus();
+      // Scroll form into view smoothly
+      setTimeout(() => {
+        form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 100);
       // default first swatch
       if (swatches.length) {
         selectSwatch(swatches[0]);
@@ -393,10 +399,27 @@ document.addEventListener('DOMContentLoaded', () => {
     saveBtn.textContent = 'Save Item';
     delete saveBtn.dataset.editMode;
     delete saveBtn.dataset.itemId;
+    // Reset add button state
+    addBtn.textContent = 'Add New Item';
+    addBtn.style.background = '';
+    addBtn.style.color = '';
   });
 
   // Add button toggles add mode
-  addBtn.addEventListener('click', () => { setAddMode(true); saveDraft(); });
+  addBtn.addEventListener('click', () => { 
+    if (addMode) {
+      setAddMode(false);
+      addBtn.textContent = 'Add New Item';
+      addBtn.style.background = '';
+      addBtn.style.color = '';
+    } else {
+      setAddMode(true); 
+      saveDraft();
+      addBtn.textContent = 'Cancel Add';
+      addBtn.style.background = '#5bc0de';
+      addBtn.style.color = 'white';
+    }
+  });
 
   // Delete buttons (for occupied slots in edit mode)
   document.querySelectorAll('.delete-btn').forEach(btn => {
@@ -414,25 +437,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Rack buttons preserve edit param and load rack's saved config
-  const rackBtns = document.querySelectorAll('.rack-btn');
-  rackBtns.forEach(b => b.addEventListener('click', () => {
-    const rackId = b.dataset.rack;
-    // save draft so entries persist when navigating to another rack
-    saveDraft();
-    const params = new URLSearchParams(window.location.search);
-    params.set('rack', rackId);
-    // Load this rack's saved config from localStorage, or fall back to current
-    const savedRackConfig = getSavedConfig(rackId);
-    const configToUse = savedRackConfig || currentConfig;
-    params.set('config', configToUse);
-    // preserve edit mode if active
-    const currentMode = params.get('edit');
-    if (currentMode) params.set('edit', currentMode);
-    const qs = params.toString();
-    window.location = `/?${qs}`;
-  }));
-
   // Remove Items button (shows delete buttons on items)
   const removeItemsBtn = document.getElementById('remove-items-btn');
   if (removeItemsBtn) {
@@ -440,7 +444,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const params = new URLSearchParams(window.location.search);
       if (params.get('edit') === 'remove') params.delete('edit'); else params.set('edit', 'remove');
       const qs = params.toString();
-      window.location = qs ? `/?${qs}` : '/';
+      window.location = qs ? `/rack/${currentRackId}?${qs}` : `/rack/${currentRackId}`;
     });
     if (window.location.search.includes('edit=remove')) {
       removeItemsBtn.textContent = 'Exit Remove Mode';
@@ -448,6 +452,8 @@ document.addEventListener('DOMContentLoaded', () => {
       removeItemsBtn.style.color = 'white';
     } else {
       removeItemsBtn.textContent = 'Remove Items';
+      removeItemsBtn.style.background = '';
+      removeItemsBtn.style.color = '';
     }
   }
 
@@ -458,39 +464,45 @@ document.addEventListener('DOMContentLoaded', () => {
       const params = new URLSearchParams(window.location.search);
       if (params.get('edit') === 'item') params.delete('edit'); else params.set('edit', 'item');
       const qs = params.toString();
-      window.location = qs ? `/?${qs}` : '/';
+      window.location = qs ? `/rack/${currentRackId}?${qs}` : `/rack/${currentRackId}`;
     });
     if (window.location.search.includes('edit=item')) {
       editItemBtn.textContent = 'Exit Edit Mode';
       editItemBtn.style.background = '#5bc0de';
       editItemBtn.style.color = 'white';
     } else {
-      editItemBtn.textContent = 'Edit Item';
+      editItemBtn.textContent = 'Edit Items';
+      editItemBtn.style.background = '';
+      editItemBtn.style.color = '';
     }
-  }
-
-  // Highlight current rack button
-  const initial = currentRackId || '1';
-  const sel = document.querySelector(`.rack-btn[data-rack="${initial}"]`);
-  if (sel) {
-    document.querySelectorAll('.rack-btn').forEach(b => b.classList.remove('active'));
-    sel.classList.add('active');
   }
 
   // Rack configuration buttons
   const configBtns = document.querySelectorAll('.config-btn');
-  configBtns.forEach(b => b.addEventListener('click', () => {
+  configBtns.forEach(b => b.addEventListener('click', async () => {
     const config = b.dataset.config;
     // Save config to localStorage for this rack so it persists
     setSavedConfig(currentRackId, config);
     currentConfig = config;
     saveDraft();
+    
+    // Save to database as well
+    try {
+      await fetch(`/rack/${currentRackId}/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: config })
+      });
+    } catch (err) {
+      console.error('Failed to save config to database:', err);
+    }
+    
     const params = new URLSearchParams(window.location.search);
     params.set('config', config);
     const qs = params.toString();
     // Add small delay to ensure localStorage write completes before reload
     setTimeout(() => {
-      window.location = `/?${qs}`;
+      window.location = `/rack/${currentRackId}?${qs}`;
     }, 50);
   }));
 

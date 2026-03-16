@@ -3,6 +3,20 @@
 {% extends "base.html" %}
 {% block content %}
 
+<!-- Icon row under the bar -->
+<div class="icon-row">
+  <img src="{{ url_for('static', filename='icons/clipboard.svg') }}" alt="Clipboard Icon" class="icon">
+  <span id="item-name-label" class="icon-label"><strong>Item Name:</strong> <span id="item-name-value"></span></span>
+</div>
+<div class="icon-row">
+  <img src="{{ url_for('static', filename='icons/tag.svg') }}" alt="Tag Icon" class="icon">
+  <span id="tags-label" class="icon-label"><strong>Tags:</strong> <span id="tags-value"></span></span>
+</div>
+<div class="icon-row">
+  <img src="{{ url_for('static', filename='icons/comment.svg') }}" alt="Comment Icon" class="icon">
+  <span id="other-names-label" class="icon-label"><strong>Other Names:</strong> <span id="other-names-value"></span></span>
+</div>
+
 <section class="rack-grid-wrapper">
   <!-- Top row -->
   <div class="rack-top">
@@ -77,73 +91,82 @@
 
 </section>
 
-<section class="rack-select-section" style="margin-top:16px;">
-  <span><strong>Select Rack:</strong></span>
-  <button class="rack-btn" data-rack="1">1</button>
-  <button class="rack-btn" data-rack="2">2</button>
-  <button class="rack-btn" data-rack="3">3</button>
-  <button class="rack-btn" data-rack="4">4</button>
+<!-- First row: Item management buttons -->
+<section class="add-item-section" style="margin-top:16px; display: flex; justify-content: center; gap: 12px; align-items: center;">
+  <button id="add-item-btn" class="config-btn">Add New Item</button>
+  <button id="remove-items-btn" class="config-btn">Remove Items</button>
+  <button id="edit-item-btn" class="config-btn">Edit Items</button>
 </section>
 
-<section class="rack-config-section" style="margin-top:12px;">
+<!-- Item form (hidden by default) -->
+<div id="add-item-form" style="display:none; margin-top:20px;">
+  <div style="background: white; border-radius: 8px; padding: 24px; max-width: 600px; margin: 0 auto; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+    <h3 style="margin: 0 0 8px 0; font-size: 18px; font-weight: 600; color: #333;">Add New Item</h3>
+    <p style="margin: 0 0 16px 0; font-size: 14px; color: #666;">Click on empty slots in the rack above to select where this item will be placed.</p>
+    
+    <div style="display:flex; flex-direction:column; gap:16px;">
+      <div>
+        <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #555;">Item Name</label>
+        <input type="text" id="item-name" placeholder="Enter item name" style="width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;" />
+      </div>
+
+      <div>
+        <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #555;">Tags</label>
+        <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+          <!-- preset tags -->
+          <button type="button" class="preset-tag" data-tag="Code Blue">Code Blue</button>
+          <button type="button" class="preset-tag" data-tag="IV">IV</button>
+          <button type="button" class="preset-tag" data-tag="Sterile">Sterile</button>
+          <button type="button" class="preset-tag" data-tag="Emergency">Emergency</button>
+          <button type="button" class="preset-tag" data-tag="Disposable">Disposable</button>
+        </div>
+        <div id="selected-tags" style="margin-top:8px;" class="tag-list"></div>
+        <div style="margin-top:8px; display:flex; gap:6px;">
+          <input type="text" id="custom-tag-input" placeholder="Add custom tag" style="flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;" />
+          <button id="add-custom-tag" type="button" class="config-btn" style="flex-shrink: 0;">Add</button>
+        </div>
+      </div>
+
+      <div>
+        <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #555;">Other Names</label>
+        <input type="text" id="item-other-names" placeholder="Comma-separated other names" style="width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;" />
+      </div>
+
+      <div>
+        <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #555;">Color</label>
+        <div id="color-picker" style="display:flex; gap:8px; align-items:center; margin-top:6px; flex-wrap: wrap;">
+          <div class="color-swatch" data-color="#ffd6e0" style="background:#ffd6e0"></div>
+          <div class="color-swatch" data-color="#ffe7b8" style="background:#ffe7b8"></div>
+          <div class="color-swatch" data-color="#fff4b2" style="background:#fff4b2"></div>
+          <div class="color-swatch" data-color="#dff7d2" style="background:#dff7d2"></div>
+          <div class="color-swatch" data-color="#c8f0f6" style="background:#c8f0f6"></div>
+          <div class="color-swatch" data-color="#d6e4ff" style="background:#d6e4ff"></div>
+          <div class="color-swatch" data-color="#ead4ff" style="background:#ead4ff"></div>
+          <div class="color-swatch" data-color="#f9d9f9" style="background:#f9d9f9"></div>
+          <div class="color-swatch" data-color="#e8f7d9" style="background:#e8f7d9"></div>
+          <div class="color-swatch" data-color="#fdeff2" style="background:#fdeff2"></div>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:12px; justify-content: flex-end; margin-top: 8px;">
+        <button id="cancel-add" type="button" style="padding: 10px 20px; background: #f5f5f5; color: #333; border: none; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer;">Cancel</button>
+        <button id="save-item-btn" class="config-btn" style="padding: 10px 20px;">Save Item</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Second row: Rack size configuration -->
+<section class="rack-config-section" style="margin-top:16px;">
   <span><strong>Rack Size:</strong></span>
   <button class="config-btn" data-config="4x4">4x4</button>
   <button class="config-btn" data-config="6x4">6x4</button>
 </section>
 
-<section class="add-item-section" style="margin-top:16px;">
-  <button id="add-item-btn">Add New Item</button>
-  <button id="remove-items-btn">Remove Items</button>
-  <button id="edit-item-btn">Edit Item</button>
-  <div id="add-item-form" style="display:none; margin-top:12px;">
-      <div style="display:flex; flex-direction:column; gap:8px; max-width:560px;">
-      <input type="text" id="item-name" placeholder="Enter item name" />
-        <div>
-          <label style="font-weight:600;">Tags</label>
-          <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
-            <!-- preset tags -->
-            <button type="button" class="preset-tag" data-tag="Code Blue">Code Blue</button>
-            <button type="button" class="preset-tag" data-tag="IV">IV</button>
-            <button type="button" class="preset-tag" data-tag="Sterile">Sterile</button>
-            <button type="button" class="preset-tag" data-tag="Emergency">Emergency</button>
-            <button type="button" class="preset-tag" data-tag="Disposable">Disposable</button>
-            <!-- selected tags appear here -->
-          </div>
-          <div id="selected-tags" style="margin-top:8px;" class="tag-list"></div>
-          <div style="margin-top:6px; display:flex; gap:6px;">
-            <input type="text" id="custom-tag-input" placeholder="Add custom tag and press Enter" />
-            <button id="add-custom-tag" type="button">Add</button>
-          </div>
-        </div>
-
-        <div>
-          <label style="font-weight:600;">Other Names</label>
-          <input type="text" id="item-other-names" placeholder="Comma-separated other names" />
-        </div>
-
-        <div>
-          <label style="font-weight:600;">Color</label>
-          <div id="color-picker" style="display:flex; gap:6px; align-items:center; margin-top:6px;">
-            <div class="color-swatch" data-color="#ffd6e0" style="background:#ffd6e0"></div>
-            <div class="color-swatch" data-color="#ffe7b8" style="background:#ffe7b8"></div>
-            <div class="color-swatch" data-color="#fff4b2" style="background:#fff4b2"></div>
-            <div class="color-swatch" data-color="#dff7d2" style="background:#dff7d2"></div>
-            <div class="color-swatch" data-color="#c8f0f6" style="background:#c8f0f6"></div>
-            <div class="color-swatch" data-color="#d6e4ff" style="background:#d6e4ff"></div>
-            <div class="color-swatch" data-color="#ead4ff" style="background:#ead4ff"></div>
-            <div class="color-swatch" data-color="#f9d9f9" style="background:#f9d9f9"></div>
-            <div class="color-swatch" data-color="#e8f7d9" style="background:#e8f7d9"></div>
-            <div class="color-swatch" data-color="#fdeff2" style="background:#fdeff2"></div>
-          </div>
-        </div>
-
-        <div style="display:flex; gap:8px;">
-          <button id="save-item-btn">Save Item</button>
-          <button id="cancel-add" type="button">Cancel</button>
-        </div>
-    </div>
-  </div>
-</section>
+<!-- Third row: Back button -->
+<div style="margin-top: 16px; text-align: center;">
+  <a href="/edit-racks" style="display: inline-block; padding: 10px 20px; background: #98D6A5; color: #333; text-decoration: none; border-radius: 6px; font-weight: 500;">← Back to Racks</a>
+</div>
 
 <script src="{{ url_for('static', filename='rack.js') }}"></script>
 
