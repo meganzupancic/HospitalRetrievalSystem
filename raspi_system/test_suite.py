@@ -3,7 +3,7 @@
 
 This runs the full system with:
 - Motion detection
-- Wake word detection  
+- Wake word detection
 - Voice recognition
 - BLE communication to Arduino racks
 - Database lookup from rack.db
@@ -18,25 +18,42 @@ import time
 
 print("✅ Starting imports...")
 
-# Check if running as root (needed for GPIO)
+# Check if running as root (needed for GPIO) - only on Unix-like systems
 import os
-if os.geteuid() != 0:
-    print("\n❌ ERROR: This script needs GPIO access.")
-    print("Please run with sudo:")
-    print("    sudo $(which python3) test_suite.py")
-    print("    OR")
-    print("    sudo /path/to/venv/bin/python3 test_suite.py\n")
-    sys.exit(1)
 
-import RPi.GPIO as GPIO
+if hasattr(os, "geteuid"):  # Unix/Linux only (not Windows)
+    if os.geteuid() != 0:
+        print("\n❌ ERROR: This script needs GPIO access.")
+        print("Please run with sudo:")
+        print("    sudo $(which python3) test_suite.py")
+        print("    OR")
+        print("    sudo /path/to/venv/bin/python3 test_suite.py\n")
+        sys.exit(1)
+
+# Try to import RPi.GPIO, but allow testing on Windows without it
+try:
+    import RPi.GPIO as GPIO
+
+    print("✅ RPi.GPIO imported successfully")
+except ImportError:
+    print("⚠️  RPi.GPIO not available (Windows/dev environment)")
+
+    # Create a mock GPIO object for non-Raspberry Pi environments
+    class MockGPIO:
+        def cleanup(self):
+            pass
+
+    GPIO = MockGPIO()
 
 try:
     from system_controller import run_system, shutdown_flag
+
     print("✅ system_controller imported successfully")
     print("✅ Using rack.db database for voice recognition")
 except Exception as e:
     print(f"❌ Error importing system_controller: {e}")
     import traceback
+
     traceback.print_exc()
     sys.exit(1)
 
@@ -53,23 +70,23 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 if __name__ == "__main__":
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("  Hospital Retrieval System - Full System Test")
-    print("="*60)
+    print("=" * 60)
     print("\nStarting all subsystems:")
     print("  - Motion detection")
     print("  - Wake word listener")
     print("  - Voice recognition (rack.db)")
     print("  - BLE communication")
     print("\nPress Ctrl+C to exit.\n")
-    
+
     try:
         run_system()
-        
+
         # Keep main thread alive
         while not shutdown_flag.is_set():
             time.sleep(1)
-            
+
     except KeyboardInterrupt:
         print("\n\n🛑 Keyboard interrupt received...")
         shutdown_flag.set()
@@ -77,6 +94,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n❌ Error running system: {e}")
         import traceback
+
         traceback.print_exc()
         shutdown_flag.set()
     finally:

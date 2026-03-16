@@ -3,7 +3,37 @@
 # motion_handler.py
 import time
 
-import RPi.GPIO as GPIO
+# Try to import RPi.GPIO, but allow testing on Windows without it
+try:
+    import RPi.GPIO as GPIO
+except ImportError:
+    print("⚠️  RPi.GPIO not available (Windows/dev environment)")
+
+    # Create a mock GPIO object for non-Raspberry Pi environments
+    class MockGPIO:
+        BCM = 11  # Mock constant
+        IN = 1  # Mock constant
+        RISING = 1  # Mock constant
+
+        def setwarnings(self, flag):
+            pass
+
+        def setmode(self, mode):
+            pass
+
+        def setup(self, pin, mode):
+            pass
+
+        def add_event_detect(self, pin, edge, callback=None, bouncetime=None):
+            pass
+
+        def remove_event_detect(self, pin):
+            pass
+
+        def cleanup(self):
+            pass
+
+    GPIO = MockGPIO()
 
 # Setup GPIO
 PIR_PIN = 17  # GPIO17

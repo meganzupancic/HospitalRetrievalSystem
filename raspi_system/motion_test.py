@@ -1,6 +1,32 @@
 import time
 
-import RPi.GPIO as GPIO
+# Try to import RPi.GPIO, but allow testing on Windows without it
+try:
+    import RPi.GPIO as GPIO
+except ImportError:
+    print("⚠️  RPi.GPIO not available (Windows/dev environment)")
+
+    # Create a mock GPIO object for non-Raspberry Pi environments
+    class MockGPIO:
+        BCM = 11  # Mock constant
+        IN = 1  # Mock constant
+
+        def setwarnings(self, flag):
+            pass
+
+        def setmode(self, mode):
+            pass
+
+        def setup(self, pin, mode):
+            pass
+
+        def input(self, pin):
+            return 0  # Mock: always return no motion
+
+        def cleanup(self):
+            pass
+
+    GPIO = MockGPIO()
 
 GPIO.setwarnings(False)  # Disable warnings
 GPIO.setmode(GPIO.BCM)  # Use BCM numbering
