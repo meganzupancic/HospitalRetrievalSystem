@@ -477,8 +477,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Rack configuration buttons
-  const configBtns = document.querySelectorAll('.config-btn');
+  // Rack configuration buttons (only those with data-config attribute)
+  const configBtns = document.querySelectorAll('.config-btn[data-config]');
   configBtns.forEach(b => b.addEventListener('click', async () => {
     const config = b.dataset.config;
     // Save config to localStorage for this rack so it persists

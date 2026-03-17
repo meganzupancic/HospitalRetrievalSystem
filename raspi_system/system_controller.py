@@ -29,7 +29,7 @@ from bleak import BleakClient, BleakScanner
 
 from raspi_system.arduino_config import get_all_rack_numbers, get_arduino_config
 from raspi_system.motion_handler import motion_listener
-from raspi_system.nlp_parser import find_keyword
+from raspi_system.nlp_parser import build_keyword_matcher, find_keyword
 
 # from bleak import BleakClient
 # DEVICE_ADDRESS = "C6:10:17:BD:9F:7F"  # your Nordic_LBS MAC
@@ -500,6 +500,9 @@ def voice_thread():
             try:
                 last_activity_time = time.time()
                 last_status_print = time.time()
+                db = load_database_from_sqlite()
+                matcher = build_keyword_matcher(db, fuzzy_threshold=0.9)
+                print(f"📚 Keyword index ready: {matcher.term_count} terms")
                 print("⏱️  Listening for keywords (30s timeout)...")
 
                 for phrase in listen_and_transcribe(shutdown_flag):
@@ -531,24 +534,28 @@ def voice_thread():
                     last_status_print = time.time()  # Reset status print timer too
                     print("⏱️  Activity detected, timeout reset")
 
-                    db = load_database_from_sqlite()
-
                     print(f"Heard: {phrase}")
-                    result = find_keyword(phrase, db)
+                    result = find_keyword(phrase, db, matcher=matcher)
                     print(f"Keyword match result: {result}")
 
                     if result:
                         keyword = result.get("item")
-                        # Load full DB and find all instances of this item so we can report every rack/location
-                        try:
-                            full_db = load_database_from_sqlite()
+                        item_id = result.get("id")
+                        match_type = result.get("match_type", "exact")
+                        confidence = result.get("confidence", 0.0)
+                        print(
+                            f"🔎 Match details: type={match_type}, confidence={confidence:.3f}, term='{result.get('matched_term', keyword)}'"
+                        )
+
+                        # Find all slot placements for the matched canonical item.
+                        if item_id is not None:
+                            matches = [e for e in db if e.get("id") == item_id]
+                        else:
                             matches = [
                                 e
-                                for e in full_db
+                                for e in db
                                 if e.get("item", "").lower() == keyword.lower()
                             ]
-                        except Exception:
-                            matches = []
 
                         if matches:
                             # Aggregate locations by rack for clearer output
