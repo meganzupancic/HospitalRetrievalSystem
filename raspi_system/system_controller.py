@@ -27,17 +27,28 @@ import time
 import pyttsx3
 from bleak import BleakClient, BleakScanner
 
-from raspi_system.arduino_config import get_all_rack_numbers, get_arduino_config
-from raspi_system.motion_handler import motion_listener
-from raspi_system.nlp_parser import build_keyword_matcher, find_keyword
+try:
+    from raspi_system.arduino_config import get_all_rack_numbers, get_arduino_config
+    from raspi_system.motion_handler import motion_listener
+    from raspi_system.nlp_parser import find_keyword
+except ModuleNotFoundError:
+    # Fallback for direct execution from raspi_system directory on Pi.
+    from arduino_config import get_all_rack_numbers, get_arduino_config
+    from motion_handler import motion_listener
+    from nlp_parser import find_keyword
 
 # from bleak import BleakClient
 # DEVICE_ADDRESS = "C6:10:17:BD:9F:7F"  # your Nordic_LBS MAC
 # LBS_LED_CHAR_UUID = "00001525-1212-efde-1523-785feabcd123"
 # from app import socketio
-from raspi_system.rack_database_adapter import load_database_from_sqlite
-from raspi_system.speech_to_text import listen_and_transcribe
-from raspi_system.vosk_wake_word import wake_word_listener
+try:
+    from raspi_system.rack_database_adapter import load_database_from_sqlite
+    from raspi_system.speech_to_text import listen_and_transcribe
+    from raspi_system.vosk_wake_word import wake_word_listener
+except ModuleNotFoundError:
+    from rack_database_adapter import load_database_from_sqlite
+    from speech_to_text import listen_and_transcribe
+    from vosk_wake_word import wake_word_listener
 
 # from socketio_instance import socketio
 
@@ -469,7 +480,7 @@ def voice_thread():
     # except Exception as e:
     #     print(f"Error loading database: {e}")
 
-    INACTIVITY_TIMEOUT = 30  # seconds
+    INACTIVITY_TIMEOUT = 30  # seconds with no matched keyword
 
     while not shutdown_flag.is_set():
         if voice_trigger.wait(timeout=1):
@@ -498,27 +509,27 @@ def voice_thread():
                     print(f"❌ Error queuing wake word event for Rack {rack_num}: {e}")
 
             try:
-                last_activity_time = time.time()
+                last_keyword_time = time.time()
                 last_status_print = time.time()
                 db = load_database_from_sqlite()
-                matcher = build_keyword_matcher(db, fuzzy_threshold=0.9)
-                print(f"📚 Keyword index ready: {matcher.term_count} terms")
-                print("⏱️  Listening for keywords (30s timeout)...")
+                print("⏱️  Listening for keywords (30s no-keyword timeout)...")
 
                 for phrase in listen_and_transcribe(shutdown_flag):
                     # Check for timeout
                     current_time = time.time()
-                    elapsed = current_time - last_activity_time
+                    elapsed = current_time - last_keyword_time
 
                     # Print periodic status (every 10 seconds)
                     if current_time - last_status_print >= 10:
                         remaining = max(0, INACTIVITY_TIMEOUT - elapsed)
-                        print(f"⏱️  Still listening... ({remaining:.0f}s until timeout)")
+                        print(
+                            f"⏱️  Still listening... ({remaining:.0f}s until no-keyword timeout)"
+                        )
                         last_status_print = current_time
 
                     if elapsed > INACTIVITY_TIMEOUT:
                         print(
-                            f"\n⏰ Timeout: No activity for {INACTIVITY_TIMEOUT} seconds"
+                            f"\n⏰ Timeout: No keyword matched for {INACTIVITY_TIMEOUT} seconds"
                         )
                         print("🔄 Resetting to wake word/motion detection mode...")
                         break
@@ -529,16 +540,16 @@ def voice_thread():
                     if shutdown_flag.is_set():
                         break
 
-                    # Update activity time when we receive a phrase
-                    last_activity_time = time.time()
-                    last_status_print = time.time()  # Reset status print timer too
-                    print("⏱️  Activity detected, timeout reset")
-
                     print(f"Heard: {phrase}")
-                    result = find_keyword(phrase, db, matcher=matcher)
+                    result = find_keyword(phrase, db)
                     print(f"Keyword match result: {result}")
 
                     if result:
+                        # Keep the session alive only when a keyword is matched.
+                        last_keyword_time = time.time()
+                        last_status_print = last_keyword_time
+                        print("⏱️  Keyword matched, no-keyword timeout reset")
+
                         keyword = result.get("item")
                         item_id = result.get("id")
                         match_type = result.get("match_type", "exact")

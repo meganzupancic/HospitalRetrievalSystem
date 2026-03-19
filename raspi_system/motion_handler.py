@@ -50,6 +50,14 @@ def motion_callback(channel):
     global motion_triggered, last_motion_time
     current_time = time.time()
 
+    # Match wake-word behavior: ignore motion while voice session is active.
+    wake_active = getattr(motion_callback, "wake_stream_active", None)
+    pause_event = getattr(motion_callback, "pause_event", None)
+    if wake_active is None or pause_event is None:
+        return
+    if (not wake_active.is_set()) or pause_event.is_set():
+        return
+
     # Debounce: ignore triggers within 2 seconds
     if current_time - last_motion_time < 2.0:
         return
@@ -87,6 +95,7 @@ def motion_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_activ
     # Attach shared objects to callback
     motion_callback.voice_trigger = voice_trigger
     motion_callback.wake_stream_active = wake_stream_active
+    motion_callback.pause_event = pause_event
 
     # Register event detection (rising edge = motion)
     try:
