@@ -1,14 +1,43 @@
 # app.py
 import hashlib
 import json
+import os
+import urllib.error
+import urllib.request
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request
 
 from db import get_conn, init_db
 
 app = Flask(__name__)
 
 init_db()
+
+DEFAULT_PRESET_TAGS = ["Code Blue", "IV", "Sterile", "Emergency", "Disposable"]
+
+
+# ---------------------------------------------------------------------------
+# Auth compatibility routes (login removed)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/login")
+def login():
+    """Redirect old login route to home."""
+    return redirect("/")
+
+
+@app.post("/login")
+def login_post():
+    """Redirect old login form posts to home."""
+    return redirect("/")
+
+
+@app.get("/logout")
+def logout():
+    """Compatibility logout route when auth is disabled."""
+    log_event("login", "Logout link clicked (auth disabled)", None)
+    return redirect("/")
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +90,67 @@ def color_for_item(label):
     b = int(b * pastel_factor + 255 * (1 - pastel_factor))
 
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def normalize_preset_tags(raw_tags):
+    """Normalize preset tags into a deduped ordered list of non-empty strings."""
+    normalized = []
+    seen = set()
+    for tag in raw_tags or []:
+        t = str(tag).strip()
+        if not t:
+            continue
+        key = t.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(t)
+    return normalized
+
+
+def get_preset_tags():
+    """Read preset tags from app_settings, with sane defaults."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT value FROM app_settings WHERE key=?",
+        ("preset_tags",),
+    ).fetchone()
+    conn.close()
+
+    if not row or not row["value"]:
+        return DEFAULT_PRESET_TAGS[:]
+
+    try:
+        parsed = json.loads(row["value"])
+        if not isinstance(parsed, list):
+            return DEFAULT_PRESET_TAGS[:]
+        normalized = normalize_preset_tags(parsed)
+        return normalized if normalized else DEFAULT_PRESET_TAGS[:]
+    except Exception:
+        return DEFAULT_PRESET_TAGS[:]
+
+
+def set_preset_tags(tags):
+    """Persist preset tags in app_settings."""
+    normalized = normalize_preset_tags(tags)
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO app_settings(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        ("preset_tags", json.dumps(normalized)),
+    )
+    conn.commit()
+    conn.close()
+    return normalized
+
+
+def parse_tags_text(raw_text):
+    """Parse tags from comma/newline/semicolon separated text."""
+    text = str(raw_text or "")
+    parts = []
+    for chunk in text.replace("\n", ",").replace(";", ",").split(","):
+        parts.append(chunk)
+    return normalize_preset_tags(parts)
 
 
 def pad_slots(slots, cols=20, rows=4):
@@ -198,17 +288,26 @@ def group_slots(slots, cols=20, rows=4):
             s = row[c]
             span = 1
             locs = [str(s["col"])]  # or use slot_id if that’s your numbering
+            slot_ids = [str(s["slot_id"]) if s.get("slot_id") else ""]
             while (
                 c + span < cols
                 and row[c + span]["item_id"] == s["item_id"]
                 and s["item_id"]
             ):
                 locs.append(str(row[c + span]["col"]))
+                slot_ids.append(
+                    str(row[c + span]["slot_id"])
+                    if row[c + span].get("slot_id")
+                    else ""
+                )
                 span += 1
             merged.append(
                 {
                     "slot": s,
                     "span": span,
+                    "slot_ids": slot_ids,
+                    "col_start": s["col"],
+                    "col_end": s["col"] + span - 1,
                     "color": s["color"],
                     "location_numbers": locs,
                     "tags": s.get("tags", []),
@@ -254,6 +353,22 @@ def rack_view(rack_id=1):
         cols_full=rack["cols"],  # full 20 columns for slicing
         rows_count=rack["rows"],
         config=config,
+        preset_tags=get_preset_tags(),
+    )
+
+
+@app.route("/settings", methods=["GET", "POST"])
+def settings_view():
+    saved = False
+    if request.method == "POST":
+        tags = parse_tags_text(request.form.get("preset_tags", ""))
+        set_preset_tags(tags)
+        saved = True
+
+    tags = get_preset_tags()
+    tags_text = ", ".join(tags)
+    return render_template(
+        "settings.html", preset_tags=tags, tags_text=tags_text, saved=saved
     )
 
 
@@ -317,7 +432,11 @@ def update_item(item_id):
     other_names = data.get("other_names")
     color = data.get("color")
     additional_slots = data.get("additional_slots", [])  # New slots to add
+    slot_ids = data.get("slot_ids")  # Exact slot set for this item on this rack
     rack_id = data.get("rack_id")
+    resize_row = data.get("resize_row")
+    resize_col_start = data.get("resize_col_start")
+    resize_col_end = data.get("resize_col_end")
 
     if not label:
         return jsonify({"error": "Label required"}), 400
@@ -356,6 +475,155 @@ def update_item(item_id):
         (label, tags_csv, other_csv, color, item_id),
     )
 
+    # Prefer resize-by-range flow: compute target slot IDs server-side from row/col.
+    if (
+        rack_id
+        and resize_row is not None
+        and resize_col_start is not None
+        and resize_col_end is not None
+    ):
+        try:
+            rack_id_int = int(rack_id)
+            row_ui = int(resize_row)
+            col_start_ui = int(resize_col_start)
+            col_end_ui = int(resize_col_end)
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({"error": "Invalid resize row/column values"}), 400
+
+        if row_ui < 1 or col_start_ui < 1 or col_end_ui < col_start_ui:
+            conn.close()
+            return jsonify({"error": "Resize range is out of bounds"}), 400
+
+        # rack_slots stores row/col zero-based in DB.
+        row_db = row_ui - 1
+        col_start_db = col_start_ui - 1
+        col_end_db = col_end_ui - 1
+
+        target_row_slots = conn.execute(
+            """
+            SELECT id
+            FROM rack_slots
+            WHERE rack_id=? AND row=? AND col BETWEEN ? AND ?
+            ORDER BY col
+            """,
+            (rack_id_int, row_db, col_start_db, col_end_db),
+        ).fetchall()
+
+        if not target_row_slots:
+            conn.close()
+            return jsonify({"error": "No slots found for requested resize range"}), 400
+
+        target_slot_ids = [int(r["id"]) for r in target_row_slots]
+
+        # Preserve this item's placements on other rows of this rack.
+        existing_item_slots = conn.execute(
+            """
+            SELECT islots.slot_id, rs.row
+            FROM item_slots islots
+            JOIN rack_slots rs ON rs.id = islots.slot_id AND rs.rack_id = islots.rack_id
+            WHERE islots.item_id=? AND islots.rack_id=?
+            """,
+            (item_id, rack_id_int),
+        ).fetchall()
+
+        other_row_slot_ids = [
+            int(r["slot_id"]) for r in existing_item_slots if int(r["row"]) != row_db
+        ]
+        final_slot_ids = other_row_slot_ids + target_slot_ids
+
+        # Allow drag-resize to replace overlapped slots from other items in this row.
+        placeholders = ",".join(["?"] * len(target_slot_ids))
+        conn.execute(
+            f"""
+            DELETE FROM item_slots
+            WHERE rack_id=?
+              AND slot_id IN ({placeholders})
+              AND item_id != ?
+            """,
+            [rack_id_int, *target_slot_ids, item_id],
+        )
+
+        conn.execute(
+            "DELETE FROM item_slots WHERE item_id=? AND rack_id=?",
+            (item_id, rack_id_int),
+        )
+
+        for sid in final_slot_ids:
+            conn.execute(
+                "INSERT INTO item_slots(item_id, rack_id, slot_id) VALUES(?,?,?)",
+                (item_id, rack_id_int, sid),
+            )
+
+        slot_ids = final_slot_ids
+
+    # If explicit slot_ids provided, replace this item's slot footprint on rack_id.
+    if (
+        slot_ids is not None
+        and rack_id
+        and not (
+            resize_row is not None
+            and resize_col_start is not None
+            and resize_col_end is not None
+        )
+    ):
+        try:
+            normalized_slot_ids = [int(s) for s in slot_ids]
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({"error": "slot_ids must be a list of integers"}), 400
+
+        if not normalized_slot_ids:
+            conn.close()
+            return jsonify({"error": "slot_ids cannot be empty"}), 400
+
+        # Ensure all requested slots belong to this rack.
+        rack_slot_rows = conn.execute(
+            "SELECT id FROM rack_slots WHERE rack_id=?",
+            (rack_id,),
+        ).fetchall()
+        valid_slot_ids = {int(r["id"]) for r in rack_slot_rows}
+        if any(sid not in valid_slot_ids for sid in normalized_slot_ids):
+            conn.close()
+            return (
+                jsonify({"error": "One or more slot_ids are invalid for this rack"}),
+                400,
+            )
+
+        # Ensure requested slots are either empty or already owned by this item.
+        placeholders = ",".join(["?"] * len(normalized_slot_ids))
+        occupied_by_other = conn.execute(
+            f"""
+            SELECT slot_id
+            FROM item_slots
+            WHERE rack_id=?
+              AND slot_id IN ({placeholders})
+              AND item_id != ?
+            """,
+            [rack_id, *normalized_slot_ids, item_id],
+        ).fetchall()
+        if occupied_by_other:
+            conn.close()
+            return (
+                jsonify(
+                    {"error": "Cannot resize into a slot already used by another item"}
+                ),
+                409,
+            )
+
+        conn.execute(
+            "DELETE FROM item_slots WHERE item_id=? AND rack_id=?",
+            (item_id, rack_id),
+        )
+
+        for sid in normalized_slot_ids:
+            conn.execute(
+                "INSERT INTO item_slots(item_id, rack_id, slot_id) VALUES(?,?,?)",
+                (item_id, rack_id, sid),
+            )
+
+        slot_ids = normalized_slot_ids
+
     # If additional slots provided, add item to those slots
     if additional_slots and rack_id:
         for slot_id in additional_slots:
@@ -387,6 +655,7 @@ def update_item(item_id):
             "before": before_state,
             "after": after_state,
             "slots_added": additional_slots,
+            "slots_set": slot_ids,
             "rack_id": rack_id,
         },
     )
@@ -610,6 +879,17 @@ def update_rack_status():
     data = request.get_json(force=True)
     rack_id = data.get("rack_id")
     status = data.get("status")
+
+    # Be permissive with incoming payloads from edge devices.
+    # Accept rack_id as int-like strings and status in mixed case.
+    try:
+        rack_id = int(rack_id)
+    except (TypeError, ValueError):
+        rack_id = None
+
+    if isinstance(status, str):
+        status = status.strip().lower()
+
     if rack_id not in (1, 2, 3, 4) or status not in (
         "connected",
         "disconnected",
@@ -637,6 +917,262 @@ def update_rack_status():
         },
     )
     return jsonify({"ok": True})
+
+
+@app.post("/api/ui-debug")
+def ui_debug_event():
+    """Receive lightweight client-side debug telemetry for UI troubleshooting."""
+    data = request.get_json(silent=True) or {}
+    event = str(data.get("event") or "unknown")
+    detail = {
+        "event": event,
+        "rack_id": data.get("rack_id"),
+        "item_id": data.get("item_id"),
+        "row": data.get("row"),
+        "left": data.get("left"),
+        "right": data.get("right"),
+        "reason": data.get("reason"),
+    }
+    app.logger.info("UI_DEBUG %s", json.dumps(detail, default=str))
+    return jsonify({"ok": True})
+
+
+@app.post("/api/live-highlight")
+def live_highlight_slots():
+    """Forward live rack slot highlights to the Pi BLE control API."""
+    data = request.get_json(silent=True) or {}
+
+    try:
+        rack_id = int(data.get("rack_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Invalid rack_id"}), 400
+
+    if rack_id not in (1, 2, 3, 4):
+        return jsonify({"ok": False, "error": "Invalid rack_id"}), 400
+
+    clear_requested = bool(data.get("clear", False))
+    if clear_requested:
+        base_url = os.environ.get("HRS_BLE_CONTROL_BASE", "http://127.0.0.1:8765")
+        url = f"{base_url.rstrip('/')}/highlight-slots"
+        payload = json.dumps(
+            {
+                "rack_id": rack_id,
+                "clear": True,
+                "source": str(data.get("source") or "ui"),
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                body = resp.read().decode("utf-8") or "{}"
+                result = json.loads(body)
+                return jsonify(result), (200 if result.get("ok") else 500)
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8") or "{}"
+                err_data = json.loads(body)
+                message = err_data.get("message") or err_data.get("error")
+            except Exception:
+                message = None
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "rack_id": rack_id,
+                        "error": message
+                        or "BLE control service rejected live highlight clear",
+                    }
+                ),
+                500,
+            )
+        except Exception as e:
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "rack_id": rack_id,
+                        "error": f"Could not reach BLE control service: {e}",
+                    }
+                ),
+                500,
+            )
+
+    raw_slot_ids = data.get("slot_ids") or []
+    if not isinstance(raw_slot_ids, list):
+        return jsonify({"ok": False, "error": "slot_ids must be a list"}), 400
+
+    parsed_slot_ids = []
+    for sid in raw_slot_ids:
+        try:
+            parsed_slot_ids.append(int(sid))
+        except (TypeError, ValueError):
+            continue
+
+    # Convert DB rack_slots IDs to rack-local slot indexes expected by BLE (1..80).
+    # rack_slots.row/col are stored zero-based in DB.
+    normalized_slot_ids = []
+    if parsed_slot_ids:
+        conn = get_conn()
+        rack_row = conn.execute(
+            "SELECT cols FROM racks WHERE id=?",
+            (rack_id,),
+        ).fetchone()
+        rack_cols = int(rack_row["cols"]) if rack_row and rack_row["cols"] else 20
+
+        placeholders = ",".join(["?"] * len(parsed_slot_ids))
+        slot_rows = conn.execute(
+            f"""
+            SELECT id, row, col
+            FROM rack_slots
+            WHERE rack_id=? AND id IN ({placeholders})
+            """,
+            [rack_id, *parsed_slot_ids],
+        ).fetchall()
+        conn.close()
+
+        id_to_local = {}
+        for r in slot_rows:
+            try:
+                row_db = int(r["row"])
+                col_db = int(r["col"])
+                local_slot = (row_db * rack_cols) + col_db + 1
+            except (TypeError, ValueError):
+                continue
+            if 1 <= local_slot <= 80:
+                id_to_local[int(r["id"])] = local_slot
+
+        for sid in parsed_slot_ids:
+            # Prefer DB mapping; fallback allows already-local slot payloads.
+            local = id_to_local.get(sid)
+            if local is None and 1 <= sid <= 80:
+                local = sid
+            if local is not None:
+                normalized_slot_ids.append(local)
+
+    # Preserve order while removing duplicates.
+    normalized_slot_ids = list(dict.fromkeys(normalized_slot_ids))
+
+    if not normalized_slot_ids:
+        return jsonify({"ok": False, "error": "No valid slot_ids"}), 400
+
+    app.logger.info(
+        "LIVE_HIGHLIGHT rack=%s input=%s translated=%s",
+        rack_id,
+        raw_slot_ids,
+        normalized_slot_ids,
+    )
+
+    base_url = os.environ.get("HRS_BLE_CONTROL_BASE", "http://127.0.0.1:8765")
+    url = f"{base_url.rstrip('/')}/highlight-slots"
+    payload = json.dumps(
+        {
+            "rack_id": rack_id,
+            "slot_ids": normalized_slot_ids,
+            "source": str(data.get("source") or "ui"),
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            body = resp.read().decode("utf-8") or "{}"
+            result = json.loads(body)
+            return jsonify(result), (200 if result.get("ok") else 500)
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8") or "{}"
+            err_data = json.loads(body)
+            message = err_data.get("message") or err_data.get("error")
+        except Exception:
+            message = None
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "rack_id": rack_id,
+                    "error": message or "BLE control service rejected live highlight",
+                }
+            ),
+            500,
+        )
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "rack_id": rack_id,
+                    "error": f"Could not reach BLE control service: {e}",
+                }
+            ),
+            500,
+        )
+
+
+@app.post("/api/manual-connect/<int:rack_id>")
+def manual_connect_rack(rack_id):
+    """Manually trigger BLE connect attempt for a rack via Pi control API."""
+    if rack_id not in (1, 2, 3, 4):
+        return jsonify({"ok": False, "error": "Invalid rack_id"}), 400
+
+    _rack_status[rack_id] = "reconnecting"
+    base_url = os.environ.get("HRS_BLE_CONTROL_BASE", "http://127.0.0.1:8765")
+    url = f"{base_url.rstrip('/')}/manual-connect"
+    payload = json.dumps({"rack_id": rack_id}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            body = resp.read().decode("utf-8") or "{}"
+            data = json.loads(body)
+            ok = bool(data.get("ok"))
+            _rack_status[rack_id] = "connected" if ok else "disconnected"
+            return jsonify(data), (200 if ok else 500)
+    except urllib.error.HTTPError as e:
+        _rack_status[rack_id] = "disconnected"
+        try:
+            body = e.read().decode("utf-8") or "{}"
+            data = json.loads(body)
+            message = data.get("message") or data.get("error")
+        except Exception:
+            message = None
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "rack_id": rack_id,
+                    "error": message or f"Manual connect failed for rack {rack_id}",
+                }
+            ),
+            500,
+        )
+    except Exception as e:
+        _rack_status[rack_id] = "disconnected"
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "rack_id": rack_id,
+                    "error": f"Could not reach BLE control service: {e}",
+                }
+            ),
+            500,
+        )
 
 
 @app.post("/rack/<int:rack_id>/config")
@@ -726,13 +1262,6 @@ def api_logs():
                 pass  # leave as plain string
         out.append(entry)
     return jsonify(out)
-
-
-@app.route("/logout")
-def logout():
-    """Handle user logout"""
-    log_event("login", "User logged out", None)
-    return render_template("logout.html")
 
 
 if __name__ == "__main__":

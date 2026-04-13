@@ -6,7 +6,8 @@ import time
 import sounddevice as sd
 import vosk
 
-WAKE_WORD = "hospital system"
+WAKE_WORD = "iris"
+WAKE_WORD_DISPLAY = "Iris"
 model_path = "vosk_model/vosk-model-small-en-us-0.15"
 model = vosk.Model(model_path)
 q = queue.Queue()
@@ -21,35 +22,32 @@ def callback(indata, frames, time, status):
     q.put(bytes(indata))
 
 
-def wake_word_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_active):
+def wake_word_listener(
+    voice_trigger,
+    shutdown_flag,
+    pause_event,
+    wake_stream_active,
+    ble_sender=None,
+    rack_provider=None,
+):
     print("Wake word listener started.")
     rec = vosk.KaldiRecognizer(model, 16000)
 
-    # Import BLE queues from system_controller (lazy import to avoid circular dependency)
-    try:
+    # Prefer injected callbacks from the running controller instance so we don't
+    # accidentally import a second copy of system_controller with separate globals.
+    if ble_sender is None or rack_provider is None:
+        try:
+            from raspi_system.arduino_config import get_all_rack_numbers
+            from raspi_system.system_controller import send_ble_command_now
 
+            rack_provider = get_all_rack_numbers
+            ble_sender = send_ble_command_now
+            ble_available = True
+        except Exception as e:
+            print(f"BLE communication not available: {e}")
+            ble_available = False
+    else:
         ble_available = True
-    except Exception as e:
-        print(f"BLE communication not available: {e}")
-        ble_available = False
-
-
-def wake_word_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_active):
-    print("Wake word listener started.")
-    rec = vosk.KaldiRecognizer(model, 16000)
-
-    # Import BLE queues from system_controller (lazy import to avoid circular dependency)
-    try:
-        from raspi_system.arduino_config import get_all_rack_numbers
-        from raspi_system.system_controller import (
-            ble_event_queues,
-            ble_event_ready_events,
-        )
-
-        ble_available = True
-    except Exception as e:
-        print(f"BLE communication not available: {e}")
-        ble_available = False
 
     while not shutdown_flag.is_set():
         # Wait for voice stream to be available (not in use by transcriber)
@@ -79,27 +77,21 @@ def wake_word_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_ac
                         result = json.loads(rec.Result())
                         text = result.get("text", "")
                         if WAKE_WORD in text.lower():
-                            print(f"Wake word '{WAKE_WORD}' detected.")
+                            print(f"Wake word '{WAKE_WORD_DISPLAY}' detected.")
 
                             # Send 'start' to all connected Arduino devices via BLE
                             if ble_available:
                                 try:
-                                    rack_numbers = get_all_rack_numbers()
-                                    queue_time = time.time()
+                                    rack_numbers = rack_provider()
 
                                     for rack_num in rack_numbers:
-                                        if rack_num in ble_event_queues:
-                                            ble_event_queues[rack_num].put(
-                                                {
-                                                    "keyword": "wake_word_start",
-                                                    "rack": rack_num,
-                                                    "slot": None,  # No specific slot for wake word
-                                                    "queued_at": queue_time,
-                                                }
-                                            )
-                                            ble_event_ready_events[rack_num].set()
+                                        if ble_sender(rack_num, "wake_word_start"):
                                             print(
-                                                f"✅ 'start' queued for Arduino on Rack {rack_num}"
+                                                f"✅ 'start' sent for Arduino on Rack {rack_num}"
+                                            )
+                                        else:
+                                            print(
+                                                f"❌ 'start' failed for Arduino on Rack {rack_num}"
                                             )
 
                                     print(

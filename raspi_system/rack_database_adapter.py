@@ -62,6 +62,7 @@ def load_database_from_sqlite():
                 {
                     "id": row["item_id"],
                     "item": row["label"],
+                    "source_type": "label",
                     "rack": row["rack_id"],
                     "location": row["slot_id"],
                     "isCalled": bool(row["isCalled"]),
@@ -78,6 +79,7 @@ def load_database_from_sqlite():
                         {
                             "id": row["item_id"],
                             "item": tag,
+                            "source_type": "tag",
                             "rack": row["rack_id"],
                             "location": row["slot_id"],
                             "isCalled": bool(row["isCalled"]),
@@ -96,6 +98,7 @@ def load_database_from_sqlite():
                         {
                             "id": row["item_id"],
                             "item": name,
+                            "source_type": "other_name",
                             "rack": row["rack_id"],
                             "location": row["slot_id"],
                             "isCalled": bool(row["isCalled"]),

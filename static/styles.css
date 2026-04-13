@@ -403,6 +403,39 @@ body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
   padding: 0;
 }
 
+.resize-handle {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 36px;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #2f3b46;
+  cursor: ew-resize;
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  padding: 0;
+  touch-action: none;
+}
+
+.resize-handle-left {
+  left: 4px;
+}
+
+.resize-handle-right {
+  right: 4px;
+}
+
+.resize-handle:hover {
+  background: rgba(255, 255, 255, 1);
+}
+
 
 
 

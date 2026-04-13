@@ -69,6 +69,7 @@ class KeywordMatcher:
                 "location": entry.get("location", 0),
                 "isCalled": bool(entry.get("isCalled", False)),
                 "matched_term": raw_term,
+                "source_type": entry.get("source_type", "label"),
             }
 
             self._term_to_entries.setdefault(norm_term, []).append(normalized_entry)
@@ -93,6 +94,27 @@ class KeywordMatcher:
             return None
         return entries[0].copy()
 
+    def _pick_entries_for_term(self, norm_term: str) -> List[dict]:
+        entries = self._term_to_entries.get(norm_term, [])
+        return [entry.copy() for entry in entries]
+
+    @staticmethod
+    def _select_best_entries(entries: List[dict]) -> List[dict]:
+        if not entries:
+            return []
+
+        label_entries = [
+            entry for entry in entries if entry.get("source_type") == "label"
+        ]
+        if label_entries:
+            return label_entries
+
+        tag_entries = [entry for entry in entries if entry.get("source_type") == "tag"]
+        if tag_entries:
+            return tag_entries
+
+        return entries
+
     def _exact_match(self, norm_text: str) -> Optional[MatchCandidate]:
         tokens = norm_text.split()
         if not tokens:
@@ -105,11 +127,16 @@ class KeywordMatcher:
             for start in range(0, len(tokens) - token_count + 1):
                 phrase = " ".join(tokens[start : start + token_count])
                 if phrase in self._term_to_entries:
-                    entry = self._pick_entry_for_term(phrase)
-                    if entry:
+                    entries = self._select_best_entries(
+                        self._pick_entries_for_term(phrase)
+                    )
+                    if entries:
+                        entry = entries[0]
                         conf = 1.0 + (token_count * 0.01)
+                        primary = entry.copy()
+                        primary["matches"] = entries
                         return MatchCandidate(
-                            entry=entry,
+                            entry=primary,
                             term=phrase,
                             confidence=conf,
                             match_type="exact",
@@ -147,10 +174,14 @@ class KeywordMatcher:
                     if score < self.fuzzy_threshold:
                         continue
 
-                    entry = self._pick_entry_for_term(term)
-                    if not entry:
+                    entries = self._select_best_entries(
+                        self._pick_entries_for_term(term)
+                    )
+                    if not entries:
                         continue
 
+                    entry = entries[0].copy()
+                    entry["matches"] = entries
                     candidate = MatchCandidate(
                         entry=entry,
                         term=term,
@@ -173,6 +204,7 @@ class KeywordMatcher:
             result["match_type"] = exact.match_type
             result["confidence"] = round(min(exact.confidence, 1.0), 3)
             result["matched_term"] = exact.term
+            result.setdefault("matches", [result.copy()])
             return result
 
         fuzzy = self._fuzzy_match(norm_text)
@@ -181,6 +213,7 @@ class KeywordMatcher:
             result["match_type"] = fuzzy.match_type
             result["confidence"] = round(fuzzy.confidence, 3)
             result["matched_term"] = fuzzy.term
+            result.setdefault("matches", [result.copy()])
             return result
 
         return None

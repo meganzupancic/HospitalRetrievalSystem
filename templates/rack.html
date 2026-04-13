@@ -21,16 +21,16 @@
   <!-- Top row -->
   <div class="rack-top">
     {% if remove_mode %}
-      {% for s in slots[:cols_full] %}
-        <div class="slot edit {{ 'occupied' if s.item_id }}"
-             style="background-color: {{ s.color }};"
-             data-slot-id="{{ s.slot_id if s.slot_id else '' }}"
-             data-item-id="{{ s.item_id }}"
-             data-color="{{ s.color }}">
-          {% if s.item_id %}
+      {% for group in rows[0] %}
+        <div class="slot edit {{ 'occupied' if group.slot.item_id }}"
+             style="background-color: {{ group.slot.color }}; grid-column: span {{ group.span }};"
+             data-slot-id="{{ group.slot.slot_id if group.slot.slot_id else '' }}"
+             data-item-id="{{ group.slot.item_id }}"
+             data-color="{{ group.slot.color }}">
+          {% if group.slot.item_id %}
             <button class="delete-btn">×</button>
           {% endif %}
-          {{ s.label if s.label else '' }}
+          {{ group.slot.label if group.slot.label else '' }}
         </div>
       {% endfor %}
     {% else %}
@@ -38,7 +38,11 @@
         <div class="slot {{ 'occupied' if group.slot.item_id }}"
             style="background-color: {{ group.slot.color }}; grid-column: span {{ group.span }};"
             data-slot-id="{{ group.slot.slot_id if group.slot.slot_id else '' }}"
+            data-slot-ids="{{ ','.join(group.slot_ids) if group.slot_ids else '' }}"
             data-item-id="{{ group.slot.item_id }}"
+            data-row="{{ group.slot.row }}"
+            data-col-start="{{ group.col_start }}"
+            data-col-end="{{ group.col_end }}"
             data-color="{{ group.slot.color }}"
             data-label="{{ group.slot.label }}"
             data-location="{{ ', '.join(group.slot.location_numbers) if group.slot.location_numbers else group.slot.slot_id }}"
@@ -51,18 +55,18 @@
   </div>
   <div class="rack-bottom">
     {% if remove_mode %}
-      {% for r in range(1,4) %}
+      {% for row in rows[1:4] %}
         <div class="rack-row">
-          {% for s in slots[r*cols_full:(r+1)*cols_full] %}
-            <div class="slot edit {{ 'occupied' if s.item_id }}"
-            style="background-color: {{ s.color }}; grid-column: span {{ s.span if s.span else 1 }};"
-            data-slot-id="{{ s.slot_id if s.slot_id else '' }}"
-            data-item-id="{{ s.item_id }}"
-            data-color="{{ s.color }}">
-              {% if s.item_id %}
+          {% for group in row %}
+            <div class="slot edit {{ 'occupied' if group.slot.item_id }}"
+            style="background-color: {{ group.slot.color }}; grid-column: span {{ group.span }};"
+            data-slot-id="{{ group.slot.slot_id if group.slot.slot_id else '' }}"
+            data-item-id="{{ group.slot.item_id }}"
+            data-color="{{ group.slot.color }}">
+              {% if group.slot.item_id %}
                 <button class="delete-btn">×</button>
               {% endif %}
-              {{ s.label if s.label else '' }}
+              {{ group.slot.label if group.slot.label else '' }}
             </div>
           {% endfor %}
         </div>
@@ -74,7 +78,11 @@
             <div class="slot {{ 'occupied' if group.slot.item_id }}"
                 style="background-color: {{ group.slot.color }}; grid-column: span {{ group.span }};"
                 data-slot-id="{{ group.slot.slot_id if group.slot.slot_id else '' }}"
+                data-slot-ids="{{ ','.join(group.slot_ids) if group.slot_ids else '' }}"
                 data-item-id="{{ group.slot.item_id }}"
+                data-row="{{ group.slot.row }}"
+                data-col-start="{{ group.col_start }}"
+                data-col-end="{{ group.col_end }}"
                 data-color="{{ group.slot.color }}"
                 data-label="{{ group.slot.label }}"
                 data-location="{{ ', '.join(group.slot.location_numbers) if group.slot.location_numbers else group.slot.slot_id }}"
@@ -113,12 +121,9 @@
       <div>
         <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #555;">Tags</label>
         <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
-          <!-- preset tags -->
-          <button type="button" class="preset-tag" data-tag="Code Blue">Code Blue</button>
-          <button type="button" class="preset-tag" data-tag="IV">IV</button>
-          <button type="button" class="preset-tag" data-tag="Sterile">Sterile</button>
-          <button type="button" class="preset-tag" data-tag="Emergency">Emergency</button>
-          <button type="button" class="preset-tag" data-tag="Disposable">Disposable</button>
+          {% for tag in preset_tags %}
+          <button type="button" class="preset-tag" data-tag="{{ tag }}">{{ tag }}</button>
+          {% endfor %}
         </div>
         <div id="selected-tags" style="margin-top:8px;" class="tag-list"></div>
         <div style="margin-top:8px; display:flex; gap:6px;">
@@ -168,6 +173,6 @@
   <a href="/edit-racks" style="display: inline-block; padding: 10px 20px; background: #98D6A5; color: #333; text-decoration: none; border-radius: 6px; font-weight: 500;">← Back to Racks</a>
 </div>
 
-<script src="{{ url_for('static', filename='rack.js') }}"></script>
+<script src="{{ url_for('static', filename='rack.js', v='20260406-live-led-1') }}"></script>
 
 {% endblock %}

@@ -18,9 +18,12 @@ def find_keyword(text, database, matcher=None):
     if not result:
         return None
 
-    # Mark this item as the most recent called in the persistent DB
+    # Mark the matched term as the most recent called in the persistent DB.
+    # This lets tag matches update every item carrying that tag.
     try:
-        database_manager.mark_item_as_most_recent(result["item"])
+        database_manager.mark_item_as_most_recent(
+            result.get("matched_term", result["item"])
+        )
     except Exception:
         # Don't let DB errors break NLP flow
         pass
@@ -28,10 +31,16 @@ def find_keyword(text, database, matcher=None):
     # Ensure isCalled is present for downstream logic.
     if "isCalled" not in result:
         try:
-            db_item = database_manager.get_item(result["item"])
-            result["isCalled"] = (
-                bool(db_item.get("isCalled", False)) if db_item else False
-            )
+            matches = result.get("matches") or []
+            if matches:
+                result["isCalled"] = any(
+                    bool(match.get("isCalled", False)) for match in matches
+                )
+            else:
+                db_item = database_manager.get_item(result["item"])
+                result["isCalled"] = (
+                    bool(db_item.get("isCalled", False)) if db_item else False
+                )
         except Exception:
             result["isCalled"] = False
 

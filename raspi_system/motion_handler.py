@@ -50,12 +50,9 @@ def motion_callback(channel):
     global motion_triggered, last_motion_time
     current_time = time.time()
 
-    # Match wake-word behavior: ignore motion while voice session is active.
     wake_active = getattr(motion_callback, "wake_stream_active", None)
     pause_event = getattr(motion_callback, "pause_event", None)
     if wake_active is None or pause_event is None:
-        return
-    if (not wake_active.is_set()) or pause_event.is_set():
         return
 
     # Debounce: ignore triggers within 2 seconds
@@ -67,35 +64,50 @@ def motion_callback(channel):
 
     try:
         print(f"🎯 Motion detected on GPIO {channel}!")
-        # This will trigger the voice thread just like wake word
+        # This will trigger the voice thread just like wake word.
+        # The start command is still sent even if a voice session is already active.
         motion_callback.voice_trigger.set()
         motion_callback.wake_stream_active.clear()
         print("✅ Voice trigger set, wake stream cleared")
 
-        # Send a "start" message to the PC to indicate activity (non-blocking)
+        # Send the same BLE start signal used by the wake-word path.
         try:
-            import socket
+            ble_sender = getattr(motion_callback, "ble_sender", None)
+            rack_provider = getattr(motion_callback, "rack_provider", None)
 
-            HOST = "172.20.10.6"
-            PORT = 5050
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1)
-                s.connect((HOST, PORT))
-                s.sendall(b"start")
-            print(f"📡 Sent 'start' to {HOST}:{PORT}")
+            if ble_sender is None or rack_provider is None:
+                raise RuntimeError("BLE sender not configured")
+
+            rack_numbers = rack_provider()
+            for rack_num in rack_numbers:
+                if ble_sender(rack_num, "wake_word_start"):
+                    print(f"✅ 'start' sent for Arduino on Rack {rack_num}")
+                else:
+                    print(f"❌ 'start' failed for Arduino on Rack {rack_num}")
+
+            print(f"Sent 'start' to {len(rack_numbers)} Arduino device(s)")
         except Exception as e:
             print(f"⚠️ Warning: Could not send start message (not critical): {e}")
     except Exception as e:
         print(f"❌ Error in motion callback: {e}")
 
 
-def motion_listener(voice_trigger, shutdown_flag, pause_event, wake_stream_active):
+def motion_listener(
+    voice_trigger,
+    shutdown_flag,
+    pause_event,
+    wake_stream_active,
+    ble_sender=None,
+    rack_provider=None,
+):
     global motion_triggered
     print("🚀 Motion listener started.")
     # Attach shared objects to callback
     motion_callback.voice_trigger = voice_trigger
     motion_callback.wake_stream_active = wake_stream_active
     motion_callback.pause_event = pause_event
+    motion_callback.ble_sender = ble_sender
+    motion_callback.rack_provider = rack_provider
 
     # Register event detection (rising edge = motion)
     try:

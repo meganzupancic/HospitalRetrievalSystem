@@ -120,3 +120,15 @@ def init_db():
         """
         )
         conn.commit()
+
+    # Create app_settings table if not exists
+    with get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+        """
+        )
+        conn.commit()

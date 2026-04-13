@@ -48,6 +48,31 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Load config from localStorage for this rack, or use URL param, or default to 4x4
   let currentConfig = getSavedConfig(currentRackId) || params.get('config') || '4x4';
+  const rackCols = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--rack-cols'), 10) || 20;
+  const rowColCellMap = new Map();
+  const itemSlotIdsMap = new Map();
+  let editBaseSlotIds = [];
+  let livePreviewTimer = null;
+  let lastLivePreviewKey = '';
+  let resizeState = null;
+  let lastResizeEndAt = 0;
+  let suppressNextClick = false;
+  const ENABLE_UI_DEBUG = true;
+
+  function sendUiDebug(eventName, payload = {}) {
+    if (!ENABLE_UI_DEBUG) return;
+    const body = {
+      event: eventName,
+      rack_id: currentRackId,
+      ...payload
+    };
+    fetch('/api/ui-debug', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      keepalive: true
+    }).catch(() => {});
+  }
 
   // Helpers
   function setAddMode(on) {
@@ -162,6 +187,739 @@ document.addEventListener('DOMContentLoaded', () => {
     selectedColor = el.dataset.color || null;
   }
 
+  function clearSlotSelection() {
+    selectedSlots = [];
+    slots.forEach(s => s.classList.remove('selected'));
+  }
+
+  function normalizeSlotIds(slotIds) {
+    if (!Array.isArray(slotIds)) return [];
+    const out = [];
+    slotIds.forEach(id => {
+      const n = parseInt(id, 10);
+      // Keep DB slot IDs as-is (positive ints). Backend translates to BLE 1..80.
+      if (Number.isFinite(n) && n >= 1) out.push(String(n));
+    });
+    return Array.from(new Set(out));
+  }
+
+  function renderSelectionBySlotIds(slotIds) {
+    const selected = new Set(normalizeSlotIds(slotIds));
+    slots.forEach(slot => {
+      const geo = getSlotGeometry(slot);
+      if (!geo) {
+        slot.classList.remove('selected');
+        return;
+      }
+
+      const renderedSlotIds = extractSlotIdsForSlot(slot, geo.startCol, geo.endCol)
+        .map(v => String(v).trim())
+        .filter(Boolean);
+      const isSelected = renderedSlotIds.some(id => selected.has(id));
+      slot.classList.toggle('selected', isSelected);
+    });
+  }
+
+  function sendLivePreview(slotIds) {
+    const normalized = normalizeSlotIds(slotIds);
+    if (!normalized.length) return;
+
+    const payload = {
+      rack_id: parseInt(currentRackId, 10),
+      slot_ids: normalized,
+      source: 'rack_edit_ui'
+    };
+
+    fetch('/api/live-highlight', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      keepalive: true
+    }).catch(() => {});
+  }
+
+  function clearLivePreview() {
+    lastLivePreviewKey = '';
+    if (livePreviewTimer) {
+      clearTimeout(livePreviewTimer);
+      livePreviewTimer = null;
+    }
+
+    return fetch('/api/live-highlight', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rack_id: parseInt(currentRackId, 10),
+        clear: true,
+        source: 'rack_edit_ui'
+      }),
+      keepalive: true
+    }).catch(() => {});
+  }
+
+  function scheduleLivePreview(slotIds, immediate = false) {
+    const normalized = normalizeSlotIds(slotIds);
+    if (!normalized.length) return;
+    const key = `${currentRackId}:${normalized.join(',')}`;
+    if (key === lastLivePreviewKey) return;
+    lastLivePreviewKey = key;
+
+    if (livePreviewTimer) {
+      clearTimeout(livePreviewTimer);
+      livePreviewTimer = null;
+    }
+
+    if (immediate) {
+      sendLivePreview(normalized);
+      return;
+    }
+
+    livePreviewTimer = setTimeout(() => {
+      livePreviewTimer = null;
+      sendLivePreview(normalized);
+    }, 70);
+  }
+
+  function setEditButtonState(active) {
+    const editItemBtn = document.getElementById('edit-item-btn');
+    if (!editItemBtn) return;
+    if (active) {
+      editItemBtn.textContent = 'Exit Edit Mode';
+      editItemBtn.style.background = '#5bc0de';
+      editItemBtn.style.color = 'white';
+    } else {
+      editItemBtn.textContent = 'Edit Items';
+      editItemBtn.style.background = '';
+      editItemBtn.style.color = '';
+    }
+  }
+
+  function enterInlineEditMode() {
+    const currentParams = new URLSearchParams(window.location.search);
+    if (currentParams.get('edit') !== 'item') {
+      currentParams.set('edit', 'item');
+      const qs = currentParams.toString();
+      const newUrl = qs ? `/rack/${currentRackId}?${qs}` : `/rack/${currentRackId}`;
+      window.history.replaceState({}, '', newUrl);
+    }
+    setEditButtonState(true);
+    setupResizeHandles();
+  }
+
+  function populateSlotHeaderAndDetails(slot) {
+    if (!slot || !slot.classList.contains('occupied')) return;
+
+    // Populate header fields (in templates/base.html)
+    const headerName = document.getElementById('item-name-value');
+    const headerTags = document.getElementById('tags-value');
+    const headerOther = document.getElementById('other-names-value');
+    if (headerName) headerName.textContent = slot.dataset.label || 'Unnamed Item';
+    if (headerTags) {
+      headerTags.innerHTML = '';
+      const hdrTags = (slot.dataset.tags || '').split(',').map(s => s.trim()).filter(Boolean);
+      if (hdrTags.length === 0) {
+        headerTags.textContent = 'None';
+      } else {
+        hdrTags.forEach(t => {
+          const chip = document.createElement('span');
+          chip.className = 'tag-chip';
+          chip.textContent = t;
+          headerTags.appendChild(chip);
+        });
+      }
+    }
+    if (headerOther) headerOther.textContent = slot.dataset.otherNames || 'None';
+
+    // Also populate detail panel if present
+    const detailPanel = document.getElementById('item-details');
+    if (detailPanel) {
+      const detailName = document.getElementById('detail-name');
+      const detailLocation = document.getElementById('detail-location');
+      const detailTags = document.getElementById('detail-tags');
+      const detailOther = document.getElementById('detail-other-names');
+
+      if (detailName) detailName.textContent = slot.dataset.label || 'Unnamed Item';
+      if (detailLocation) detailLocation.textContent = slot.dataset.location || slot.dataset.slotId || 'N/A';
+      if (detailTags) {
+        detailTags.innerHTML = '';
+        const tags = (slot.dataset.tags || '').split(',').map(s => s.trim()).filter(Boolean);
+        if (tags.length === 0) detailTags.textContent = 'None';
+        tags.forEach(t => {
+          const chip = document.createElement('span');
+          chip.className = 'tag-chip';
+          chip.textContent = t;
+          detailTags.appendChild(chip);
+        });
+      }
+      if (detailOther) detailOther.textContent = slot.dataset.otherNames || 'None';
+      detailPanel.style.display = 'block';
+    }
+  }
+
+  function loadSlotIntoEditor(slot) {
+    const itemId = slot.dataset.itemId;
+    if (!itemId) return;
+
+    addMode = false;
+    clearSlotSelection();
+    editBaseSlotIds = Array.from(itemSlotIdsMap.get(itemId) || []).map(String);
+    renderSelectionBySlotIds(editBaseSlotIds);
+    scheduleLivePreview(editBaseSlotIds, true);
+
+    nameInput.value = slot.dataset.label || '';
+
+    const tagsStr = slot.dataset.tags || '';
+    selectedTags = tagsStr.split(',').map(s => s.trim()).filter(Boolean);
+    renderSelectedTags();
+
+    otherNamesInput.value = slot.dataset.otherNames || '';
+
+    const itemColor = slot.dataset.color;
+    const colorSwatch = swatches.find(sw => sw.dataset.color === itemColor);
+    if (colorSwatch) selectSwatch(colorSwatch);
+    else selectedColor = itemColor;
+
+    form.style.display = 'block';
+    saveBtn.textContent = 'Update Item';
+    saveBtn.dataset.itemId = itemId;
+    saveBtn.dataset.editMode = 'true';
+
+    // Keep the top summary section in sync while editing.
+    populateSlotHeaderAndDetails(slot);
+  }
+
+  function isItemEditMode() {
+    const currentParams = new URLSearchParams(window.location.search);
+    return currentParams.get('edit') === 'item';
+  }
+
+  function setupResizeHandles() {
+    document.querySelectorAll('.resize-handle').forEach(h => h.remove());
+    if (!isItemEditMode()) return;
+
+    slots.forEach(slot => {
+      if (!slot.classList.contains('occupied')) return;
+
+      const leftHandle = document.createElement('button');
+      leftHandle.type = 'button';
+      leftHandle.className = 'resize-handle resize-handle-left';
+      leftHandle.setAttribute('aria-label', 'Resize item left');
+      leftHandle.textContent = '⋮';
+
+      const rightHandle = document.createElement('button');
+      rightHandle.type = 'button';
+      rightHandle.className = 'resize-handle resize-handle-right';
+      rightHandle.setAttribute('aria-label', 'Resize item right');
+      rightHandle.textContent = '⋮';
+
+      leftHandle.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        startResize(slot, e, 'left', leftHandle);
+      });
+
+      rightHandle.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        startResize(slot, e, 'right', rightHandle);
+      });
+
+      slot.appendChild(leftHandle);
+      slot.appendChild(rightHandle);
+    });
+  }
+
+  function getRowFromContainer(slot) {
+    const top = slot.closest('.rack-top');
+    if (top) return 1;
+
+    const rowEl = slot.closest('.rack-row');
+    if (!rowEl) return null;
+    const allRows = Array.from(document.querySelectorAll('.rack-bottom .rack-row'));
+    const idx = allRows.indexOf(rowEl);
+    if (idx === -1) return null;
+    return idx + 2;
+  }
+
+  function getSlotSpan(slot) {
+    const style = slot.getAttribute('style') || '';
+    const m = style.match(/grid-column\s*:\s*span\s*(\d+)/i);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    const dataStart = parseInt(slot.dataset.colStart || '', 10);
+    const dataEnd = parseInt(slot.dataset.colEnd || '', 10);
+    if (Number.isFinite(dataStart) && Number.isFinite(dataEnd) && dataEnd >= dataStart) {
+      return (dataEnd - dataStart) + 1;
+    }
+    return 1;
+  }
+
+  function getSlotGeometry(slot) {
+    const row = parseInt(slot.dataset.row || '', 10) || getRowFromContainer(slot);
+    if (!Number.isFinite(row)) return null;
+
+    const dataStart = parseInt(slot.dataset.colStart || '', 10);
+    const dataEnd = parseInt(slot.dataset.colEnd || '', 10);
+    if (Number.isFinite(dataStart) && Number.isFinite(dataEnd) && dataEnd >= dataStart) {
+      return { row, startCol: dataStart, endCol: dataEnd };
+    }
+
+    const rowContainer = slot.closest('.rack-row') || slot.closest('.rack-top');
+    if (!rowContainer) return null;
+
+    let colCursor = 1;
+    const rowSlots = Array.from(rowContainer.querySelectorAll('.slot'));
+    for (const s of rowSlots) {
+      const span = getSlotSpan(s);
+      const startCol = colCursor;
+      const endCol = colCursor + span - 1;
+      if (s === slot) return { row, startCol, endCol };
+      colCursor = endCol + 1;
+    }
+
+    return null;
+  }
+
+  function extractSlotIdsForSlot(slot, startCol, endCol) {
+    const fromData = (slot.dataset.slotIds || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    if (fromData.length) return fromData;
+
+    const fromLocation = (slot.dataset.location || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    if (fromLocation.length) return fromLocation;
+
+    const single = (slot.dataset.slotId || '').trim();
+    if (single) {
+      const spanLen = Math.max(1, (endCol - startCol) + 1);
+      return [single, ...Array.from({ length: spanLen - 1 }, () => '')];
+    }
+
+    return [];
+  }
+
+  function normalizeItemId(rawItemId) {
+    const value = String(rawItemId || '').trim();
+    if (!value) return '';
+    if (/^(none|null|undefined)$/i.test(value)) return '';
+    return value;
+  }
+
+  function buildCellMaps() {
+    rowColCellMap.clear();
+    itemSlotIdsMap.clear();
+
+    slots.forEach(slot => {
+      const geo = getSlotGeometry(slot);
+      if (!geo) return;
+      const row = geo.row;
+      const colStart = geo.startCol;
+      const colEnd = geo.endCol;
+
+      const itemId = normalizeItemId(slot.dataset.itemId);
+      const parsedSlotIds = extractSlotIdsForSlot(slot, colStart, colEnd);
+
+      let index = 0;
+      for (let c = colStart; c <= colEnd; c += 1) {
+        const fallbackSlotId = c === colStart ? (slot.dataset.slotId || '').trim() : '';
+        const slotId = parsedSlotIds[index] || fallbackSlotId;
+        rowColCellMap.set(`${row}:${c}`, { itemId, slotId: slotId || '' });
+
+        if (itemId && slotId) {
+          if (!itemSlotIdsMap.has(itemId)) itemSlotIdsMap.set(itemId, new Set());
+          itemSlotIdsMap.get(itemId).add(slotId);
+        }
+        index += 1;
+      }
+    });
+  }
+
+  function getRangeSlotIds(row, colStart, colEnd) {
+    const ids = [];
+    for (let c = colStart; c <= colEnd; c += 1) {
+      const cell = rowColCellMap.get(`${row}:${c}`);
+      if (cell && cell.slotId) ids.push(cell.slotId);
+    }
+    return ids;
+  }
+
+  function getAllowedLeft(itemId, row, rightCol) {
+    let allowedLeft = 1;
+    for (let c = rightCol; c >= 1; c -= 1) {
+      const cell = rowColCellMap.get(`${row}:${c}`);
+      if (cell && cell.itemId && cell.itemId !== itemId) {
+        allowedLeft = c + 1;
+        break;
+      }
+      allowedLeft = c;
+    }
+    return allowedLeft;
+  }
+
+  function getAllowedRight(itemId, row, leftCol) {
+    let allowedRight = rackCols;
+    for (let c = leftCol; c <= rackCols; c += 1) {
+      const cell = rowColCellMap.get(`${row}:${c}`);
+      if (cell && cell.itemId && cell.itemId !== itemId) {
+        allowedRight = c - 1;
+        break;
+      }
+      allowedRight = c;
+    }
+    return allowedRight;
+  }
+
+  function getPointerColumn(rowContainer, clientX) {
+    const rect = rowContainer.getBoundingClientRect();
+    if (rect.width <= 0) return 1;
+    const unitWidth = rect.width / rackCols;
+    const offsetX = Math.max(0, Math.min(rect.width - 1, clientX - rect.left));
+    const col = Math.floor(offsetX / unitWidth) + 1;
+    return Math.max(1, Math.min(rackCols, col));
+  }
+
+  function getHoveredColumnForResize(e, state) {
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    if (!el) return null;
+    const hoveredSlot = el.closest('.slot');
+    if (!hoveredSlot) return null;
+
+    if ((hoveredSlot.dataset.itemId || '').trim() === state.itemId) return null;
+
+    const geo = getSlotGeometry(hoveredSlot);
+    if (!geo || geo.row !== state.row) return null;
+
+    if (state.direction === 'left') return geo.startCol;
+    if (state.direction === 'right') return geo.endCol;
+    return geo.startCol;
+  }
+
+  function previewResizeRange(row, leftCol, rightCol) {
+    clearSlotSelection();
+    selectedSlots = getRangeSlotIds(row, leftCol, rightCol);
+
+    slots.forEach(s => {
+      const geo = getSlotGeometry(s);
+      if (!geo) return;
+      const sRow = geo.row;
+      const sStart = geo.startCol;
+      const sEnd = geo.endCol;
+      if (sRow !== row) return;
+      const overlaps = !(sEnd < leftCol || sStart > rightCol);
+      if (overlaps) s.classList.add('selected');
+    });
+  }
+
+  function buildResizePreviewSlotIds(state, currentIds) {
+    const allIdsSet = new Set(Array.from(itemSlotIdsMap.get(state.itemId) || []).map(String));
+    state.baseIds.forEach(id => allIdsSet.delete(String(id)));
+    currentIds.forEach(id => allIdsSet.add(String(id)));
+    return Array.from(allIdsSet).filter(Boolean);
+  }
+
+  async function persistResizedSlots(itemId, resizeInfo, slotIds) {
+    sendUiDebug('persist_begin', {
+      item_id: itemId,
+      row: resizeInfo.row,
+      left: resizeInfo.leftCol,
+      right: resizeInfo.rightCol
+    });
+
+    const label = (nameInput.value || '').trim();
+    const otherRaw = (otherNamesInput.value || '').trim();
+    const otherArr = otherRaw ? otherRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+    const res = await fetch(`/items/${itemId}/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        label: label || 'Unnamed Item',
+        tags: selectedTags,
+        other_names: otherArr,
+        color: selectedColor,
+        resize_row: resizeInfo.row,
+        resize_col_start: resizeInfo.leftCol,
+        resize_col_end: resizeInfo.rightCol,
+        slot_ids: slotIds,
+        rack_id: currentRackId
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      sendUiDebug('persist_error', {
+        item_id: itemId,
+        reason: err.error || 'http_not_ok'
+      });
+      throw new Error(err.error || 'Failed to resize item');
+    }
+
+    sendUiDebug('persist_ok', { item_id: itemId });
+  }
+
+  function handleResizeMove(e) {
+    if (!resizeState) return;
+    if (e.pointerId !== undefined && resizeState.pointerId !== undefined && e.pointerId !== resizeState.pointerId) return;
+
+    const next = computeResizeCurrent(resizeState, e.clientX);
+
+    if (!resizeState.debugMoveSent) {
+      resizeState.debugMoveSent = true;
+      sendUiDebug('drag_move', {
+        item_id: resizeState.itemId,
+        row: resizeState.row,
+        left: resizeState.baseLeftCol,
+        right: resizeState.baseRightCol
+      });
+    }
+
+    if (!next) return;
+    resizeState.current = next;
+    previewResizeRange(resizeState.row, next.leftCol, next.rightCol);
+    const previewIds = buildResizePreviewSlotIds(resizeState, next.ids.map(String));
+    scheduleLivePreview(previewIds, false);
+  }
+
+  function handleResizeMouseMove(e) {
+    if (!resizeState) return;
+    handleResizeMove({
+      clientX: e.clientX,
+      pointerId: resizeState.pointerId
+    });
+  }
+
+  function handleResizeMouseUp(e) {
+    if (!resizeState) return;
+    handleResizeUp({
+      clientX: e.clientX,
+      pointerId: resizeState.pointerId
+    });
+  }
+
+  function computeResizeCurrent(state, clientX) {
+    const pointerCol = getPointerColumn(state.rowContainer, clientX);
+    const startPointerCol = Number.isFinite(state.startPointerCol)
+      ? state.startPointerCol
+      : pointerCol;
+    const deltaCols = pointerCol - startPointerCol;
+
+    if (state.direction === 'left') {
+      const minLeft = 1;
+      const maxLeft = state.endCol;
+      const byDelta = state.baseLeftCol + deltaCols;
+      const desiredLeft = Math.min(byDelta, pointerCol);
+      const leftCol = Math.max(minLeft, Math.min(desiredLeft, maxLeft));
+      const ids = getRangeSlotIds(state.row, leftCol, state.endCol);
+      const resolvedIds = ids.length ? ids : state.baseIds;
+      if (!resolvedIds.length) return null;
+      return { leftCol, rightCol: state.endCol, ids: resolvedIds };
+    }
+
+    const maxRight = rackCols;
+    const minRight = state.startCol;
+    const byDelta = state.baseRightCol + deltaCols;
+    const desiredRight = Math.max(byDelta, pointerCol);
+    const rightCol = Math.min(maxRight, Math.max(desiredRight, minRight));
+    const ids = getRangeSlotIds(state.row, state.startCol, rightCol);
+    const resolvedIds = ids.length ? ids : state.baseIds;
+    if (!resolvedIds.length) return null;
+    return { leftCol: state.startCol, rightCol, ids: resolvedIds };
+  }
+
+  async function handleResizeUp() {
+    if (resizeState && arguments.length > 0) {
+      const e = arguments[0];
+      if (e && e.pointerId !== undefined && resizeState.pointerId !== undefined && e.pointerId !== resizeState.pointerId) {
+        return;
+      }
+    }
+
+    window.removeEventListener('pointermove', handleResizeMove);
+    window.removeEventListener('pointerup', handleResizeUp);
+    window.removeEventListener('pointercancel', handleResizeUp);
+    window.removeEventListener('mousemove', handleResizeMouseMove);
+    window.removeEventListener('mouseup', handleResizeMouseUp);
+    document.removeEventListener('pointermove', handleResizeMove, true);
+    document.removeEventListener('pointerup', handleResizeUp, true);
+    document.removeEventListener('pointercancel', handleResizeUp, true);
+    document.removeEventListener('mousemove', handleResizeMouseMove, true);
+    document.removeEventListener('mouseup', handleResizeMouseUp, true);
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+    if (!resizeState) return;
+
+    const state = resizeState;
+    resizeState = null;
+    lastResizeEndAt = Date.now();
+
+    if (arguments.length > 0) {
+      const e = arguments[0];
+      if (e && Number.isFinite(e.clientX)) {
+        const endCurrent = computeResizeCurrent(state, e.clientX);
+        if (endCurrent) state.current = endCurrent;
+      }
+    }
+
+    if (!state.current) {
+      sendUiDebug('drag_end_no_change', {
+        item_id: state.itemId,
+        reason: 'no_current'
+      });
+      return;
+    }
+
+    suppressNextClick = true;
+
+    const currentIds = state.current.ids.map(String);
+    const sameSize =
+      state.current.leftCol === state.baseLeftCol
+      && state.current.rightCol === state.baseRightCol;
+    if (sameSize) {
+      sendUiDebug('drag_end_same_size', {
+        item_id: state.itemId,
+        row: state.row,
+        left: state.baseLeftCol,
+        right: state.baseRightCol,
+        reason: 'no_column_change_or_blocked'
+      });
+      state.activeSlot.style.transition = '';
+      const originalPreview = buildResizePreviewSlotIds(state, state.baseIds.map(String));
+      scheduleLivePreview(originalPreview, true);
+      return;
+    }
+
+    const allIdsSet = new Set(Array.from(itemSlotIdsMap.get(state.itemId) || []).map(String));
+    state.baseIds.forEach(id => allIdsSet.delete(String(id)));
+    currentIds.forEach(id => allIdsSet.add(String(id)));
+    const finalIds = Array.from(allIdsSet).filter(Boolean);
+
+    if (!finalIds.length) {
+      sendUiDebug('drag_end_invalid', {
+        item_id: state.itemId,
+        reason: 'empty_final_ids'
+      });
+      alert('Item must occupy at least one slot.');
+      return;
+    }
+
+    try {
+      await persistResizedSlots(
+        state.itemId,
+        { row: state.row, leftCol: state.current.leftCol, rightCol: state.current.rightCol },
+        finalIds
+      );
+      scheduleLivePreview(finalIds, true);
+      clearDraft();
+      window.location.reload();
+    } catch (err) {
+      console.error(err);
+      state.activeSlot.style.transition = '';
+      alert(err.message || 'Could not resize item.');
+    }
+  }
+
+  function startResize(slot, e, forcedDirection = null, handleEl = null) {
+    if (typeof e.button === 'number' && e.button !== 0) return;
+    if (e.pointerType && e.isPrimary === false) return;
+    if (resizeState) return;
+    if ((Date.now() - lastResizeEndAt) < 120) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const editMode = params.get('edit');
+    if (editMode !== 'item' || addMode || !slot.classList.contains('occupied')) {
+      sendUiDebug('drag_blocked', {
+        reason: `editMode=${editMode}|addMode=${addMode}|occupied=${slot.classList.contains('occupied')}`
+      });
+      return;
+    }
+
+    const geo = getSlotGeometry(slot);
+    if (!geo) {
+      sendUiDebug('drag_blocked', { reason: 'no_geometry' });
+      return;
+    }
+    const row = geo.row;
+    const startCol = geo.startCol;
+    const endCol = geo.endCol;
+    const itemId = (slot.dataset.itemId || '').trim();
+    if (!Number.isFinite(row) || !Number.isFinite(startCol) || !Number.isFinite(endCol) || !itemId) {
+      sendUiDebug('drag_blocked', { reason: 'invalid_geometry_or_item' });
+      return;
+    }
+
+    const rowContainer = slot.closest('.rack-row') || slot.closest('.rack-top');
+    if (!rowContainer) {
+      sendUiDebug('drag_blocked', { reason: 'no_row_container' });
+      return;
+    }
+
+    // Do not rebuild handles here; removing the active handle can cancel drag start.
+    loadSlotIntoEditor(slot);
+
+    resizeState = {
+      activeSlot: slot,
+      itemId,
+      row,
+      startCol,
+      endCol,
+      rowContainer,
+      startX: e.clientX,
+      colWidth: Math.max(1, rowContainer.getBoundingClientRect().width / rackCols),
+      startPointerCol: getPointerColumn(rowContainer, e.clientX),
+      pointerId: e.pointerId,
+      originalGridColumn: slot.style.gridColumn || '',
+      direction: forcedDirection,
+      forcedDirection,
+      debugMoveSent: false,
+      baseLeftCol: startCol,
+      baseRightCol: endCol,
+      baseIds: getRangeSlotIds(row, startCol, endCol),
+      current: {
+        leftCol: startCol,
+        rightCol: endCol,
+        ids: getRangeSlotIds(row, startCol, endCol)
+      }
+    };
+
+    resizeState.activeSlot.style.transition = 'none';
+
+    sendUiDebug('drag_start', {
+      item_id: itemId,
+      row,
+      left: startCol,
+      right: endCol
+    });
+
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'ew-resize';
+    if (handleEl && typeof handleEl.setPointerCapture === 'function' && e.pointerId !== undefined) {
+      try {
+        handleEl.setPointerCapture(e.pointerId);
+      } catch (_err) {
+        // Ignore pointer capture failures on unsupported browsers/devices.
+      }
+    }
+    window.addEventListener('pointermove', handleResizeMove);
+    window.addEventListener('pointerup', handleResizeUp);
+    window.addEventListener('pointercancel', handleResizeUp);
+    window.addEventListener('mousemove', handleResizeMouseMove);
+    window.addEventListener('mouseup', handleResizeMouseUp);
+    document.addEventListener('pointermove', handleResizeMove, true);
+    document.addEventListener('pointerup', handleResizeUp, true);
+    document.addEventListener('pointercancel', handleResizeUp, true);
+    document.addEventListener('mousemove', handleResizeMouseMove, true);
+    document.addEventListener('mouseup', handleResizeMouseUp, true);
+  }
+
+  buildCellMaps();
+  setupResizeHandles();
+
   // Wire preset tag buttons
   presetBtns.forEach(b => {
     b.addEventListener('click', () => {
@@ -195,6 +953,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Slot click behavior
   slots.forEach(slot => {
     slot.addEventListener('click', (e) => {
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        return;
+      }
+
       // Check if we're in edit item mode
       const urlParams = new URLSearchParams(window.location.search);
       const editMode = urlParams.get('edit');
@@ -203,34 +966,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (editMode === 'item') {
         // If slot is occupied, load item for editing
         if (slot.classList.contains('occupied')) {
-          const itemId = slot.dataset.itemId;
-          if (!itemId) return;
-          
-          // Populate form with item data
-          nameInput.value = slot.dataset.label || '';
-          
-          // Parse and set tags
-          const tagsStr = slot.dataset.tags || '';
-          selectedTags = tagsStr.split(',').map(s => s.trim()).filter(Boolean);
-          renderSelectedTags();
-          
-          // Set other names
-          otherNamesInput.value = slot.dataset.otherNames || '';
-          
-          // Set color
-          const itemColor = slot.dataset.color;
-          const colorSwatch = swatches.find(sw => sw.dataset.color === itemColor);
-          if (colorSwatch) selectSwatch(colorSwatch);
-          else selectedColor = itemColor;
-          
-          // Show form
-          form.style.display = 'block';
-          
-          // Change save button to update mode
-          saveBtn.textContent = 'Update Item';
-          saveBtn.dataset.itemId = itemId;
-          saveBtn.dataset.editMode = 'true';
-          
+          loadSlotIntoEditor(slot);
           return;
         } else {
           // If slot is empty and form is visible (item loaded for editing), allow selecting additional slots
@@ -243,6 +979,8 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
               selectedSlots = selectedSlots.filter(sid => sid !== id);
             }
+            const liveSlots = normalizeSlotIds([...editBaseSlotIds, ...selectedSlots]);
+            scheduleLivePreview(liveSlots, true);
             saveDraft();
             return;
           }
@@ -265,55 +1003,17 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
+      // Outside add mode, clicking an occupied slot should immediately enter item editing.
+      if (slot.classList.contains('occupied') && editMode !== 'remove') {
+        enterInlineEditMode();
+        loadSlotIntoEditor(slot);
+        return;
+      }
+
       // Not add mode: if the slot is occupied, populate header and details
       if (!slot.classList.contains('occupied')) return;
 
-      // Populate header fields (in templates/base.html)
-      const headerName = document.getElementById('item-name-value');
-      const headerTags = document.getElementById('tags-value');
-      const headerOther = document.getElementById('other-names-value');
-      if (headerName) headerName.textContent = slot.dataset.label || 'Unnamed Item';
-      if (headerTags) {
-        headerTags.innerHTML = '';
-        const hdrTags = (slot.dataset.tags || '').split(',').map(s => s.trim()).filter(Boolean);
-        if (hdrTags.length === 0) {
-          headerTags.textContent = 'None';
-        } else {
-          hdrTags.forEach(t => {
-            const chip = document.createElement('span');
-            chip.className = 'tag-chip';
-            chip.textContent = t;
-            headerTags.appendChild(chip);
-          });
-        }
-      }
-      if (headerOther) headerOther.textContent = slot.dataset.otherNames || 'None';
-
-      // Also populate detail panel if present
-      const detailPanel = document.getElementById('item-details');
-      if (detailPanel) {
-        const detailName = document.getElementById('detail-name');
-        const detailLocation = document.getElementById('detail-location');
-        const detailTags = document.getElementById('detail-tags');
-        const detailOther = document.getElementById('detail-other-names');
-
-        if (detailName) detailName.textContent = slot.dataset.label || 'Unnamed Item';
-        if (detailLocation) detailLocation.textContent = slot.dataset.location || slot.dataset.slotId || 'N/A';
-        if (detailTags) {
-          // render tag chips
-          detailTags.innerHTML = '';
-          const tags = (slot.dataset.tags || '').split(',').map(s => s.trim()).filter(Boolean);
-          if (tags.length === 0) detailTags.textContent = 'None';
-          tags.forEach(t => {
-            const chip = document.createElement('span');
-            chip.className = 'tag-chip';
-            chip.textContent = t;
-            detailTags.appendChild(chip);
-          });
-        }
-        if (detailOther) detailOther.textContent = slot.dataset.otherNames || 'None';
-        detailPanel.style.display = 'block';
-      }
+      populateSlotHeaderAndDetails(slot);
     });
   });
 
@@ -429,10 +1129,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const itemId = slot.dataset.itemId;
       const slotId = slot.dataset.slotId;
       if (!itemId) return;
+      const params = new URLSearchParams(window.location.search);
+      const isRemoveMode = params.get('edit') === 'remove';
+      const payload = isRemoveMode
+        ? { item_id: itemId }
+        : { item_id: itemId, slot_id: slotId };
       fetch('/remove', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_id: itemId, slot_id: slotId })
+        body: JSON.stringify(payload)
       }).then(() => window.location.reload());
     });
   });
@@ -462,19 +1167,29 @@ document.addEventListener('DOMContentLoaded', () => {
   if (editItemBtn) {
     editItemBtn.addEventListener('click', () => {
       const params = new URLSearchParams(window.location.search);
-      if (params.get('edit') === 'item') params.delete('edit'); else params.set('edit', 'item');
+      const isExitingEditMode = params.get('edit') === 'item';
+      if (isExitingEditMode) {
+        clearLivePreview();
+        params.delete('edit');
+      } else {
+        params.set('edit', 'item');
+      }
       const qs = params.toString();
       window.location = qs ? `/rack/${currentRackId}?${qs}` : `/rack/${currentRackId}`;
     });
-    if (window.location.search.includes('edit=item')) {
-      editItemBtn.textContent = 'Exit Edit Mode';
-      editItemBtn.style.background = '#5bc0de';
-      editItemBtn.style.color = 'white';
-    } else {
-      editItemBtn.textContent = 'Edit Items';
-      editItemBtn.style.background = '';
-      editItemBtn.style.color = '';
-    }
+    setEditButtonState(window.location.search.includes('edit=item'));
+  }
+
+  const backToRacksLink = document.querySelector('a[href="/edit-racks"]');
+  if (backToRacksLink) {
+    backToRacksLink.addEventListener('click', async (event) => {
+      event.preventDefault();
+      try {
+        await clearLivePreview();
+      } finally {
+        window.location = backToRacksLink.href;
+      }
+    });
   }
 
   // Rack configuration buttons (only those with data-config attribute)
