@@ -9,6 +9,17 @@
     { "item": "medical tape", "rack": 3, "location": 14 },
     { "item": "syringes", "rack": 4, "location": 3 },
     { "item": "face masks", "rack": 1, "location": 10 },
-    { "item": "scissors", "rack": 2, "location": 16 }
+    { "item": "scissors", "rack": 2, "location": 16 },
+    { "item": "1 milliliter syringe", "rack": 4, "location": 3 },
+    { "item": "3 milliliter syringe", "rack": 4, "location": 4 },
+    { "item": "5 milliliter syringe", "rack": 4, "location": 5 },
+    { "item": "10 milliliter syringe", "rack": 4, "location": 6 },
+    { "item": "sterile gauze", "rack": 2, "location": 13 },
+    { "item": "surgical gloves", "rack": 1, "location": 2 },
+    { "item": "nitrile gloves", "rack": 1, "location": 3 },
+    { "item": "glucose meter", "rack": 3, "location": 9 },
+    { "item": "blood pressure cuff", "rack": 2, "location": 11 },
+    { "item": "stethoscope", "rack": 1, "location": 9 }
   ]
 }
+

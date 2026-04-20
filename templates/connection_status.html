@@ -80,30 +80,15 @@
     margin-bottom: 4px;
   }
 
-  .manual-connect-btn {
-    border: 1px solid #1f6feb;
-    color: #1f6feb;
-    background: #f4f8ff;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 600;
-    padding: 5px 8px;
-    cursor: pointer;
-    transition: all 0.15s ease-in-out;
-  }
-
-  .manual-connect-btn:hover:not(:disabled) {
-    background: #e8f0ff;
-  }
-
-  .manual-connect-btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
   .rack-status-text {
     font-size: 13px;
     font-weight: 500;
+  }
+
+  .battery-text {
+    margin-top: 4px;
+    font-size: 12px;
+    color: #5d6785;
   }
 
   .rack-status-text.connected    { color: #27ae60; }
@@ -165,15 +150,9 @@
       <div class="rack-info">
         <div class="rack-header">
           <div class="rack-name">{{ rack.name }}</div>
-          <button
-            class="manual-connect-btn"
-            id="connect-btn-{{ rack.id }}"
-            onclick="manualConnect({{ rack.id }})"
-          >
-            Manually connect
-          </button>
         </div>
         <div class="rack-status-text disconnected" id="status-text-{{ rack.id }}">Disconnected</div>
+        <div class="battery-text" id="battery-text-{{ rack.id }}">Battery: --%</div>
       </div>
     </div>
     {% endfor %}
@@ -229,37 +208,6 @@
       }
     } catch (e) {
       // Network error — leave current state as-is
-    }
-  }
-
-  async function manualConnect(rackId) {
-    const btn = document.getElementById("connect-btn-" + rackId);
-    const originalText = btn ? btn.textContent : "Manually connect";
-
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = "Connecting...";
-    }
-
-    applyStatus(rackId, "reconnecting");
-
-    try {
-      const res = await fetch("/api/manual-connect/" + rackId, { method: "POST" });
-      const data = await res.json();
-
-      if (!res.ok || !data.ok) {
-        applyStatus(rackId, "disconnected");
-        alert("Failed to connected to rack " + rackId);
-      }
-    } catch (e) {
-      applyStatus(rackId, "disconnected");
-      alert("Failed to connected to rack " + rackId);
-    } finally {
-      await refreshStatus();
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = originalText;
-      }
     }
   }
 

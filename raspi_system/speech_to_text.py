@@ -4,18 +4,28 @@
 
 # speech_to_text.py
 import json
+import os
 import queue
 
 import sounddevice as sd
 import vosk
 
-# Default model path
-model_path = "vosk_model/vosk-model-small-en-us-0.15"
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_VOSK_MODEL_DIR = os.path.join(_BASE_DIR, "vosk_model")
+
+
+def _model_path(folder_name):
+    return os.path.join(_VOSK_MODEL_DIR, folder_name)
+
+
+# Default model path (kept in sync with current loaded model)
+model_path = _model_path("vosk-model-en-us-0.22")
 
 # Available models configuration
 AVAILABLE_MODELS = {
-    "vosk_small": "vosk_model/vosk-model-small-en-us-0.15",
-    "vosk_medium": "vosk_model/vosk-model-en-us-0.22",
+    "vosk_small": _model_path("vosk-model-small-en-us-0.15"),
+    "vosk_medium": _model_path("vosk-model-en-us-0.22"),
+    "vosk_large": _model_path("vosk-model-en-us-0.42-gigaspeech"),
     "whisper_tiny": None,  # Not implemented yet
     "whisper_base": None,  # Not implemented yet
 }
@@ -24,6 +34,18 @@ AVAILABLE_MODELS = {
 model = None
 current_model_name = None
 q = queue.Queue()
+
+
+def _is_model_available(path):
+    return bool(path) and os.path.isdir(path)
+
+
+def _best_available_vosk_model():
+    # Prefer larger models when available for better transcription accuracy.
+    for name in ("vosk_large", "vosk_medium", "vosk_small"):
+        if _is_model_available(AVAILABLE_MODELS.get(name)):
+            return name
+    return "vosk_small"
 
 
 def set_stt_model_choice(choice):
@@ -67,6 +89,15 @@ def set_stt_model_choice(choice):
         model_name = "vosk_small"
         model_path = AVAILABLE_MODELS[model_name]
 
+    if not _is_model_available(model_path):
+        fallback = _best_available_vosk_model()
+        print(
+            f"⚠️  Model files not found for '{model_name}' at '{model_path}'. "
+            f"Using '{fallback}' instead."
+        )
+        model_name = fallback
+        model_path = AVAILABLE_MODELS[model_name]
+
     # Load the model
     try:
         print(f"📦 Loading STT model: {model_name}...")
@@ -84,9 +115,30 @@ def set_stt_model_choice(choice):
         return "vosk_small"
 
 
+def get_stt_model_info():
+    """Return the active STT model name and path for diagnostics/logging."""
+    return {
+        "name": current_model_name,
+        "path": model_path,
+    }
+
+
+def ensure_stt_model(model_name="vosk_medium"):
+    """Ensure a specific STT model is loaded; returns active model name."""
+    global current_model_name
+    normalized = str(model_name or "").strip().lower().replace(" ", "_")
+    if normalized and current_model_name != normalized:
+        return set_stt_model_choice(normalized)
+    return current_model_name
+
+
 # Initialize with default model
 if model is None:
-    set_stt_model_choice(1)
+    env_model = os.getenv("STT_MODEL")
+    if env_model:
+        set_stt_model_choice(env_model)
+    else:
+        set_stt_model_choice("vosk_small")
 
 
 def callback(indata, frames, time, status):
@@ -97,6 +149,8 @@ def callback(indata, frames, time, status):
 
 
 def listen_and_transcribe(shutdown_flag):
+    info = get_stt_model_info()
+    print(f"STT active model: {info['name']} ({info['path']})")
     print("Listening...")
     rec = vosk.KaldiRecognizer(model, 16000)
 

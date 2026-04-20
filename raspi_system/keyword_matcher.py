@@ -12,8 +12,12 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional
 
+from .medical_abbreviations import expand_database_with_aliases
+
 _NORMALIZE_RE = re.compile(r"[^a-z0-9\s]")
 _SPACE_RE = re.compile(r"\s+")
+
+DEFAULT_FUZZY_THRESHOLD = 0.80
 
 
 def normalize_text(text: str) -> str:
@@ -35,7 +39,7 @@ class MatchCandidate:
 class KeywordMatcher:
     """Fast in-memory matcher for item labels, tags, and aliases."""
 
-    def __init__(self, database: List[dict], fuzzy_threshold: float = 0.9) -> None:
+    def __init__(self, database: List[dict], fuzzy_threshold: float = 0.80) -> None:
         self.fuzzy_threshold = float(fuzzy_threshold)
         self.max_term_tokens = 1
         self._terms_by_token_count: Dict[int, List[str]] = {}
@@ -99,27 +103,37 @@ class KeywordMatcher:
         return [entry.copy() for entry in entries]
 
     @staticmethod
-    def _select_best_entries(entries: List[dict]) -> List[dict]:
+    def _select_best_entries(
+        entries: List[dict], include_groups: bool = False
+    ) -> List[dict]:
         if not entries:
             return []
 
+        # Prefer concrete single-item matches first.
         label_entries = [
             entry for entry in entries if entry.get("source_type") == "label"
         ]
         if label_entries:
             return label_entries
 
+        alias_entries = [
+            entry for entry in entries if entry.get("source_type") == "alias"
+        ]
+        if alias_entries:
+            return alias_entries
+
         tag_entries = [entry for entry in entries if entry.get("source_type") == "tag"]
-        if tag_entries:
+        if include_groups and tag_entries:
             return tag_entries
 
-        return entries
+        return []
 
     def _exact_match(self, norm_text: str) -> Optional[MatchCandidate]:
         tokens = norm_text.split()
         if not tokens:
             return None
 
+        # First pass: single-item terms only (labels/aliases).
         for token_count in sorted(self._terms_by_token_count.keys(), reverse=True):
             if token_count > len(tokens):
                 continue
@@ -128,7 +142,7 @@ class KeywordMatcher:
                 phrase = " ".join(tokens[start : start + token_count])
                 if phrase in self._term_to_entries:
                     entries = self._select_best_entries(
-                        self._pick_entries_for_term(phrase)
+                        self._pick_entries_for_term(phrase), include_groups=False
                     )
                     if entries:
                         entry = entries[0]
@@ -142,6 +156,36 @@ class KeywordMatcher:
                             match_type="exact",
                         )
 
+        # Second pass: allow group/tag fallback.
+        for token_count in sorted(self._terms_by_token_count.keys(), reverse=True):
+            if token_count > len(tokens):
+                continue
+
+            for start in range(0, len(tokens) - token_count + 1):
+                phrase = " ".join(tokens[start : start + token_count])
+                if phrase in self._term_to_entries:
+                    entries = self._select_best_entries(
+                        self._pick_entries_for_term(phrase), include_groups=True
+                    )
+                    if not entries:
+                        continue
+                    tag_entries = [
+                        entry for entry in entries if entry.get("source_type") == "tag"
+                    ]
+                    if not tag_entries:
+                        continue
+
+                    entry = tag_entries[0]
+                    conf = 1.0 + (token_count * 0.01)
+                    primary = entry.copy()
+                    primary["matches"] = tag_entries
+                    return MatchCandidate(
+                        entry=primary,
+                        term=phrase,
+                        confidence=conf,
+                        match_type="exact",
+                    )
+
         return None
 
     def _fuzzy_match(self, norm_text: str) -> Optional[MatchCandidate]:
@@ -149,7 +193,8 @@ class KeywordMatcher:
         if not tokens:
             return None
 
-        best: Optional[MatchCandidate] = None
+        best_single: Optional[MatchCandidate] = None
+        best_group: Optional[MatchCandidate] = None
 
         for token_count, terms in self._terms_by_token_count.items():
             if token_count > len(tokens) + 1:
@@ -158,8 +203,12 @@ class KeywordMatcher:
             window_sizes = {token_count}
             if token_count > 1:
                 window_sizes.add(token_count - 1)
+            if token_count > 2:
+                window_sizes.add(token_count - 2)
             if token_count < self.max_term_tokens:
                 window_sizes.add(token_count + 1)
+            if token_count + 2 <= self.max_term_tokens:
+                window_sizes.add(token_count + 2)
 
             windows = set()
             for win_size in window_sizes:
@@ -174,8 +223,17 @@ class KeywordMatcher:
                     if score < self.fuzzy_threshold:
                         continue
 
+                    raw_entries = self._pick_entries_for_term(term)
+                    if not raw_entries:
+                        continue
+
+                    source_types = {entry.get("source_type") for entry in raw_entries}
+                    is_group_term = "tag" in source_types and not (
+                        "label" in source_types or "alias" in source_types
+                    )
+
                     entries = self._select_best_entries(
-                        self._pick_entries_for_term(term)
+                        raw_entries, include_groups=is_group_term
                     )
                     if not entries:
                         continue
@@ -188,10 +246,21 @@ class KeywordMatcher:
                         confidence=score,
                         match_type="fuzzy",
                     )
-                    if best is None or candidate.confidence > best.confidence:
-                        best = candidate
+                    if is_group_term:
+                        if (
+                            best_group is None
+                            or candidate.confidence > best_group.confidence
+                        ):
+                            best_group = candidate
+                    else:
+                        if (
+                            best_single is None
+                            or candidate.confidence > best_single.confidence
+                        ):
+                            best_single = candidate
 
-        return best
+        # Prefer single-item fuzzy matches; use group/tag only as fallback.
+        return best_single or best_group
 
     def match(self, text: str) -> Optional[dict]:
         norm_text = normalize_text(text)
@@ -220,7 +289,9 @@ class KeywordMatcher:
 
 
 def build_keyword_matcher(
-    database: List[dict], fuzzy_threshold: float = 0.9
+    database: List[dict], fuzzy_threshold: float = DEFAULT_FUZZY_THRESHOLD
 ) -> KeywordMatcher:
-    """Create a reusable matcher from DB rows."""
-    return KeywordMatcher(database=database, fuzzy_threshold=fuzzy_threshold)
+    """Create a reusable matcher from DB rows, expanded with medical aliases."""
+    # Expand database with common medical supply aliases for better matching.
+    expanded_database = expand_database_with_aliases(database)
+    return KeywordMatcher(database=expanded_database, fuzzy_threshold=fuzzy_threshold)

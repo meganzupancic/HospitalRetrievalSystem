@@ -10,6 +10,32 @@ import sqlite3
 DB_PATH = os.path.join(os.path.dirname(__file__), "database", "rack.db")
 
 
+def _lookup_terms(item_label):
+    """Generate normalized lookup terms with simple singular/plural fallback."""
+    base = str(item_label or "").strip()
+    if not base:
+        return []
+
+    terms = [base]
+    lower = base.lower()
+
+    if lower.endswith("s") and len(base) > 1:
+        terms.append(base[:-1])
+    elif len(base) > 1:
+        terms.append(base + "s")
+
+    # Preserve order while removing duplicates (case-insensitive).
+    seen = set()
+    unique_terms = []
+    for term in terms:
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_terms.append(term)
+    return unique_terms
+
+
 def get_conn():
     """Get a database connection with Row factory."""
     conn = sqlite3.connect(DB_PATH)
@@ -130,21 +156,26 @@ def mark_item_as_most_recent(item_label):
         # First, reset all items
         cursor.execute("UPDATE items SET isCalled = 0")
 
-        # Find items matching label, tags, or other_names
-        cursor.execute(
-            """
-            UPDATE items 
-            SET isCalled = 1 
-            WHERE label = ? 
-               OR tags LIKE ? 
-               OR other_names LIKE ?
-        """,
-            (item_label, f"%{item_label}%", f"%{item_label}%"),
-        )
+        # Find items matching label, tags, or other_names.
+        # Use case-insensitive compare and singular/plural fallback.
+        terms = _lookup_terms(item_label)
+        total_updated = 0
+        for term in terms:
+            cursor.execute(
+                """
+                UPDATE items
+                SET isCalled = 1
+                WHERE LOWER(TRIM(label)) = LOWER(TRIM(?))
+                   OR LOWER(COALESCE(tags, '')) LIKE '%' || LOWER(TRIM(?)) || '%'
+                   OR LOWER(COALESCE(other_names, '')) LIKE '%' || LOWER(TRIM(?)) || '%'
+            """,
+                (term, term, term),
+            )
+            total_updated += cursor.rowcount
 
         conn.commit()
 
-        if cursor.rowcount == 0:
+        if total_updated == 0:
             print(f"Warning: No item found matching '{item_label}'")
 
     except Exception as e:
@@ -163,33 +194,35 @@ def get_item(item_label):
     cursor = conn.cursor()
 
     try:
-        cursor.execute(
-            """
-            SELECT 
-                i.label as item,
-                islots.rack_id as rack,
-                islots.slot_id as location,
-                i.isCalled
-            FROM items i
-            JOIN item_slots islots ON i.id = islots.item_id
-            WHERE i.label = ? 
-               OR i.tags LIKE ? 
-               OR i.other_names LIKE ?
-            LIMIT 1
-        """,
-            (item_label, f"%{item_label}%", f"%{item_label}%"),
-        )
+        terms = _lookup_terms(item_label)
+        for term in terms:
+            cursor.execute(
+                """
+                SELECT
+                    i.label as item,
+                    islots.rack_id as rack,
+                    islots.slot_id as location,
+                    i.isCalled
+                FROM items i
+                JOIN item_slots islots ON i.id = islots.item_id
+                WHERE LOWER(TRIM(i.label)) = LOWER(TRIM(?))
+                   OR LOWER(COALESCE(i.tags, '')) LIKE '%' || LOWER(TRIM(?)) || '%'
+                   OR LOWER(COALESCE(i.other_names, '')) LIKE '%' || LOWER(TRIM(?)) || '%'
+                LIMIT 1
+            """,
+                (term, term, term),
+            )
 
-        row = cursor.fetchone()
-        if not row:
-            return None
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "item": row["item"],
+                    "rack": row["rack"],
+                    "location": row["location"],
+                    "isCalled": bool(row["isCalled"]),
+                }
 
-        return {
-            "item": row["item"],
-            "rack": row["rack"],
-            "location": row["location"],
-            "isCalled": bool(row["isCalled"]),
-        }
+        return None
 
     except Exception as e:
         print(f"Error getting item: {e}")
