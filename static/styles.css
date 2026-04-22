@@ -15,6 +15,16 @@
 * { box-sizing: border-box; }
 body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
 
+/* Main content area - push below fixed header and alert */
+main {
+  margin-top: 60px;
+  position: relative;
+}
+
+.hotspot-alert-active main {
+  margin-top: 118px;
+}
+
 /* Top bar */
 .top-bar {
   display: flex;
@@ -30,11 +40,69 @@ body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
   z-index: 1000;
 }
 
+.hotspot-alert-active .top-bar {
+  top: 58px;
+}
+
 .top-bar-image {
   height: 41px;
   width: 165px;
   aspect-ratio: 165/41;
   border-radius: 40px;
+}
+
+/* Hotspot alert */
+.hotspot-alert {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  background-color: #fff3cd;
+  border-bottom: 2px solid #ffc107;
+  padding: 12px 20px;
+  z-index: 1500;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.hotspot-alert-content {
+  color: #856404;
+  font-size: 14px;
+  font-weight: 500;
+  flex: 1;
+}
+
+.hotspot-alert-content a.alert-link {
+  color: #004085;
+  text-decoration: underline;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.hotspot-alert-content a.alert-link:hover {
+  color: #002e5e;
+}
+
+.alert-close-btn {
+  background: none;
+  border: none;
+  font-size: 24px;
+  color: #856404;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: color 0.2s ease;
+}
+
+.alert-close-btn:hover {
+  color: #644d04;
+}
+
+/* Adjust top bar when alert is visible */
+.hotspot-alert-active .hamburger-menu {
+  top: 72px;
 }
 
 /* Hamburger Menu */

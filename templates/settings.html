@@ -7,7 +7,13 @@
 
   {% if saved %}
   <div style="margin-bottom: 16px; padding: 10px 12px; border-radius: 6px; background: #e8f7d9; color: #2f6b3f; border: 1px solid #cde8bc;">
-    Settings saved.
+    Preset tags saved.
+  </div>
+  {% endif %}
+
+  {% if hotspot_saved %}
+  <div style="margin-bottom: 16px; padding: 10px 12px; border-radius: 6px; background: #e8f7d9; color: #2f6b3f; border: 1px solid #cde8bc;">
+    {{ hotspot_saved_message or "Hotspot password updated successfully." }}
   </div>
   {% endif %}
 
@@ -42,6 +48,208 @@
         {% endfor %}
       </div>
     </div>
+  </div>
+
+  <!-- Hotspot Password Section -->
+  <div style="background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-top: 20px;">
+    <h2 style="font-size: 18px; margin-top: 0; margin-bottom: 10px;">Hotspot Security</h2>
+    <p style="font-size: 14px; color: #666; margin-top: 0; margin-bottom: 12px;">
+      Update the WiFi hotspot password for security. The default password is not secure and should be changed immediately.
+    </p>
+
+    {% if hotspot_error %}
+    <div style="margin-bottom: 12px; padding: 10px 12px; border-radius: 6px; background: #fde7e9; color: #8a1f2b; border: 1px solid #f3c2c8; font-size: 14px; font-weight: 600;">
+      {{ hotspot_error }}
+    </div>
+    {% endif %}
+
+    <div id="hotspot-inline-error" style="display: none; margin-bottom: 12px; padding: 10px 12px; border-radius: 6px; background: #fde7e9; color: #8a1f2b; border: 1px solid #f3c2c8; font-size: 14px; font-weight: 600;"></div>
+
+    {% if hotspot_password_changed %}
+    <div style="margin-bottom: 12px; padding: 8px 10px; border-radius: 6px; background: #e8f7d9; color: #2f6b3f; border: 1px solid #cde8bc; font-size: 13px;">
+      ✓ Hotspot password has been updated.
+    </div>
+    {% else %}
+    <div style="margin-bottom: 12px; padding: 8px 10px; border-radius: 6px; background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; font-size: 13px;">
+      ⚠️ Hotspot password is still at default. Please update it.
+    </div>
+    {% endif %}
+
+    <form id="hotspot-password-form" method="post" action="/settings" novalidate>
+      <div style="margin-bottom: 12px;">
+        <label for="hotspot-password" style="display: block; font-weight: 600; margin-bottom: 6px; color: #555;">New Hotspot Password</label>
+        <input
+          type="password"
+          id="hotspot-password"
+          name="hotspot_password"
+          autocomplete="new-password"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
+          style="width: 100%; border: 1px solid #ddd; border-radius: 6px; padding: 10px 12px; font-size: 14px; box-sizing: border-box;"
+          placeholder="Must be at least 8 characters"
+        />
+        <p style="margin: 6px 0 0 0; font-size: 12px; color: #777;">
+          Minimum 8 characters for security.
+        </p>
+      </div>
+
+      <div style="margin-bottom: 12px;">
+        <label for="confirm-password" style="display: block; font-weight: 600; margin-bottom: 6px; color: #555;">Confirm Password</label>
+        <input
+          type="password"
+          id="confirm-password"
+          name="confirm_password"
+          autocomplete="new-password"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
+          style="width: 100%; border: 1px solid #ddd; border-radius: 6px; padding: 10px 12px; font-size: 14px; box-sizing: border-box;"
+          placeholder="Re-enter password to confirm"
+        />
+      </div>
+
+      <button id="hotspot-update-btn" type="button" class="config-btn" style="padding: 10px 20px;" onclick="submitHotspotPassword();">Update Hotspot Password</button>
+    </form>
+
+    <div id="hotspot-inline-success" style="display: none; margin-top: 10px; padding: 10px 12px; border-radius: 6px; background: #e8f7d9; color: #2f6b3f; border: 1px solid #cde8bc; font-size: 14px; font-weight: 600;"></div>
+
+    <div style="margin-top: 16px; padding: 10px; background: #f8f9fa; border-radius: 6px; border-left: 4px solid #0066cc;">
+      <p style="margin: 0; font-size: 12px; color: #555; line-height: 1.5;">
+        <strong>Note:</strong> The hotspot allows you to connect to the Raspberry Pi from your phone or other devices without needing a separate WiFi network. Keep this password secure and share it only with authorized users.
+      </p>
+    </div>
+
+    <!-- Reset button -->
+    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #ddd;">
+      <button
+        type="button"
+        class="reset-btn"
+        onclick="if(confirm('Reset hotspot password status to default? This will re-enable the warning alert on all pages.')) { resetHotspotPassword(); }"
+        style="padding: 8px 16px; background-color: #f44336; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: background-color 0.2s ease;"
+      >
+        Reset to Default
+      </button>
+      <p style="margin: 8px 0 0 0; font-size: 12px; color: #777;">
+        Mark password as not changed (will show alert again)
+      </p>
+    </div>
+
+    <script>
+      function resetHotspotPassword() {
+        fetch('/api/reset-hotspot-password', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            // Show success message and reload
+            alert('Hotspot password status has been reset. Reloading page...');
+            location.reload();
+          }
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          alert('Failed to reset hotspot password status');
+        });
+      }
+
+      function showHotspotInlineError(message) {
+        const errorBox = document.getElementById('hotspot-inline-error');
+        if (!errorBox) {
+          alert(message);
+          return;
+        }
+        errorBox.textContent = message;
+        errorBox.style.display = 'block';
+        errorBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      function submitHotspotPassword() {
+        const passInput = document.getElementById('hotspot-password');
+        const confirmInput = document.getElementById('confirm-password');
+        const btn = document.getElementById('hotspot-update-btn');
+        const errorBox = document.getElementById('hotspot-inline-error');
+        const successBox = document.getElementById('hotspot-inline-success');
+
+        const pass = (passInput && passInput.value ? passInput.value : '').trim();
+        const confirm = (confirmInput && confirmInput.value ? confirmInput.value : '').trim();
+
+        if (errorBox) {
+          errorBox.style.display = 'none';
+          errorBox.textContent = '';
+        }
+        if (successBox) {
+          successBox.style.display = 'none';
+          successBox.textContent = '';
+        }
+
+        if (!pass) {
+          showHotspotInlineError('Please enter a new hotspot password.');
+          return;
+        }
+        if (pass.length < 8) {
+          showHotspotInlineError('Hotspot password must be at least 8 characters.');
+          return;
+        }
+        if (pass.length > 63) {
+          showHotspotInlineError('Hotspot password must be 63 characters or fewer.');
+          return;
+        }
+        if (pass !== confirm) {
+          showHotspotInlineError('Passwords do not match.');
+          return;
+        }
+
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = 'Saving...';
+          btn.style.opacity = '0.7';
+        }
+
+        fetch('/api/hotspot-password', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            hotspot_password: pass,
+            confirm_password: confirm
+          })
+        })
+        .then(async (response) => {
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || payload.success === false) {
+            throw new Error(payload.error || 'Failed to queue hotspot password update.');
+          }
+          return payload;
+        })
+        .then((payload) => {
+          if (successBox) {
+            successBox.textContent = payload.message || 'Hotspot update queued. Reconnect with the new password in a few seconds.';
+            successBox.style.display = 'block';
+          }
+          if (passInput) passInput.value = '';
+          if (confirmInput) confirmInput.value = '';
+          setTimeout(() => {
+            location.reload();
+          }, 1500);
+        })
+        .catch((error) => {
+          showHotspotInlineError(error.message || 'Failed to queue hotspot password update.');
+        })
+        .finally(() => {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Update Hotspot Password';
+            btn.style.opacity = '1';
+          }
+        });
+      }
+    </script>
   </div>
 </div>
 {% endblock %}

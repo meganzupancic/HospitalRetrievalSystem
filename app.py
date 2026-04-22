@@ -2,8 +2,14 @@
 import hashlib
 import json
 import os
+import re
+import shutil
+import subprocess
+import threading
+import time
 import urllib.error
 import urllib.request
+from glob import glob
 
 from flask import Flask, jsonify, redirect, render_template, request
 
@@ -14,6 +20,7 @@ app = Flask(__name__)
 init_db()
 
 DEFAULT_PRESET_TAGS = ["Code Blue", "IV", "Sterile", "Emergency", "Disposable"]
+DEFAULT_HOTSPOT_PASSWORD = "BestProject!"
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +158,455 @@ def parse_tags_text(raw_text):
     for chunk in text.replace("\n", ",").replace(";", ",").split(","):
         parts.append(chunk)
     return normalize_preset_tags(parts)
+
+
+def get_hotspot_password_changed():
+    """Check if hotspot password has been changed from default."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT value FROM app_settings WHERE key=?",
+        ("hotspot_password_changed",),
+    ).fetchone()
+    conn.close()
+
+    if not row or not row["value"]:
+        return False
+
+    return row["value"].lower() == "true"
+
+
+def set_hotspot_password_changed(changed: bool):
+    """Mark that the hotspot password has been changed."""
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO app_settings(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        ("hotspot_password_changed", "true" if changed else "false"),
+    )
+    conn.commit()
+    conn.close()
+    log_event("system", "Hotspot password changed", {"changed": changed})
+
+
+def set_setting_value(key: str, value: str):
+    """Generic app_settings upsert helper."""
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO app_settings(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_setting_value(key: str, default=""):
+    conn = get_conn()
+    row = conn.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+    conn.close()
+    if not row or row["value"] is None:
+        return default
+    return row["value"]
+
+
+def _apply_hotspot_password_job(new_password: str, changed: bool):
+    """Background job for hotspot password update/reset to keep HTTP responses fast."""
+    updated, msg = update_hotspot_password(new_password)
+    if updated:
+        set_hotspot_password_changed(changed)
+        set_setting_value("hotspot_last_error", "")
+        success_msg = (
+            "Hotspot reset to default password. Reconnect using BestProject! after the hotspot restarts."
+            if not changed
+            else msg
+        )
+        set_setting_value("hotspot_last_success", success_msg)
+        log_event(
+            "system",
+            "Hotspot password updated via async job",
+            {"password_length": len(new_password), "changed": changed},
+        )
+    else:
+        set_setting_value("hotspot_last_error", msg)
+        set_setting_value("hotspot_last_success", "")
+        log_event(
+            "system",
+            "Hotspot password async update failed",
+            {"reason": msg},
+        )
+
+
+def _detect_hostapd_conf_path():
+    """Find hostapd config path from env, distro defaults, and common locations."""
+    # Support common spelling plus previously typoed env var names for resilience.
+    env_keys = [
+        "HRS_HOSTAPD_CONF",
+        "HRS_HOSTSPOPD_CONF",
+        "HRS_HOSTSPOTD_CONF",
+    ]
+
+    env_candidates = []
+    for key in env_keys:
+        v = os.environ.get(key, "").strip()
+        if v:
+            env_candidates.append(v)
+
+    daemon_conf_candidate = ""
+    default_hostapd_file = "/etc/default/hostapd"
+    if os.path.isfile(default_hostapd_file):
+        try:
+            with open(default_hostapd_file, "r", encoding="utf-8") as f:
+                for raw_line in f:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if line.startswith("DAEMON_CONF") and "=" in line:
+                        _, rhs = line.split("=", 1)
+                        daemon_conf_candidate = rhs.strip().strip('"').strip("'")
+                        break
+        except Exception:
+            pass
+
+    candidates = env_candidates + [
+        daemon_conf_candidate,
+        "/etc/hostapd/hostapd.conf",
+        "/etc/hostapd.conf",
+    ]
+
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+
+    # Try to infer config path from running hostapd command line.
+    try:
+        ps = subprocess.run(
+            ["ps", "-eo", "args"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for line in ps.stdout.splitlines():
+            s = line.strip()
+            if "hostapd" not in s:
+                continue
+
+            # Common form: hostapd ... /path/to/file.conf
+            for token in s.split():
+                if token.endswith(".conf") and os.path.isfile(token):
+                    return token
+
+            # Alternate form: hostapd -c /path/to/file.conf
+            m = re.search(r"(?:^|\s)-c\s+([^\s]+\.conf)", s)
+            if m:
+                path = m.group(1)
+                if os.path.isfile(path):
+                    return path
+    except Exception:
+        pass
+
+    # Last-resort file scan in common hostapd config locations.
+    scan_patterns = [
+        "/etc/hostapd/*.conf",
+        "/etc/hostapd/*.cfg",
+        "/etc/hostapd*.conf",
+        "/etc/*hostapd*.conf",
+    ]
+    for pattern in scan_patterns:
+        for path in glob(pattern):
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                if "wpa_passphrase=" in content:
+                    return path
+            except Exception:
+                continue
+
+    return None
+
+
+def _restart_hostapd_service():
+    """Restart hostapd, trying common command variants."""
+    restart_cmds = [
+        ["systemctl", "restart", "hostapd"],
+        ["sudo", "systemctl", "restart", "hostapd"],
+        ["service", "hostapd", "restart"],
+        ["sudo", "service", "hostapd", "restart"],
+    ]
+    errors = []
+    for cmd in restart_cmds:
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return True, result.stdout.strip() or "hostapd restarted"
+        except FileNotFoundError:
+            errors.append(f"Command not found: {' '.join(cmd)}")
+        except subprocess.CalledProcessError as exc:
+            msg = (exc.stderr or exc.stdout or "").strip()
+            errors.append(f"{' '.join(cmd)} failed: {msg or 'unknown error'}")
+    return False, " ; ".join(errors)
+
+
+def _restart_hostapd_after_delay(delay_seconds=2.0):
+    """Restart hostapd in background so HTTP response can return before WiFi drops."""
+    time.sleep(delay_seconds)
+    restarted, msg = _restart_hostapd_service()
+    if restarted:
+        log_event("system", "Hotspot service restarted", {"detail": msg})
+    else:
+        log_event("system", "Hotspot service restart failed", {"detail": msg})
+
+
+def _run_nmcli(cmd_args):
+    """Run nmcli command, with robust path resolution and sudo fallback."""
+    nmcli_candidates = []
+    which_nmcli = shutil.which("nmcli")
+    if which_nmcli:
+        nmcli_candidates.append(which_nmcli)
+    for p in ("/usr/bin/nmcli", "/bin/nmcli"):
+        if p not in nmcli_candidates and os.path.isfile(p):
+            nmcli_candidates.append(p)
+
+    sudo_candidates = []
+    which_sudo = shutil.which("sudo")
+    if which_sudo:
+        sudo_candidates.append(which_sudo)
+    for p in ("/usr/bin/sudo", "/bin/sudo"):
+        if p not in sudo_candidates and os.path.isfile(p):
+            sudo_candidates.append(p)
+
+    variants = []
+    for nmcli_path in nmcli_candidates:
+        variants.append([nmcli_path, *cmd_args])
+        for sudo_path in sudo_candidates:
+            # -n avoids hanging on password prompt in non-interactive contexts.
+            variants.append([sudo_path, "-n", nmcli_path, *cmd_args])
+
+    errors = []
+    env = os.environ.copy()
+    env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+    for cmd in variants:
+        try:
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                env=env,
+            )
+            return True, (res.stdout or "").strip()
+        except FileNotFoundError:
+            errors.append(f"Command not found: {' '.join(cmd)}")
+        except subprocess.CalledProcessError as exc:
+            msg = (exc.stderr or exc.stdout or "").strip()
+            errors.append(f"{' '.join(cmd)} failed: {msg or 'unknown error'}")
+
+    if not variants:
+        errors.append(
+            "nmcli executable not found in PATH or common locations (/usr/bin, /bin)."
+        )
+
+    return False, " ; ".join(errors)
+
+
+def _update_hotspot_password_nmcli(new_password: str):
+    """Fallback update path for hotspots managed by NetworkManager."""
+    # Allow explicit hotspot profile override by UUID or NAME.
+    profile_override = os.environ.get("HRS_HOTSPOT_NM_PROFILE", "").strip()
+
+    ok, out = _run_nmcli(["-t", "-f", "UUID,NAME,TYPE", "connection", "show"])
+    if not ok:
+        return (
+            False,
+            "hostapd config not found and nmcli is unavailable. "
+            "If your hotspot uses hostapd, set HRS_HOSTAPD_CONF to the active hostapd .conf file path. "
+            f"Details: {out}",
+        )
+
+    wifi_profiles = []  # list of {uuid, name}
+    hotspot_uuids = []
+    hotspot_refs = []
+
+    if profile_override:
+        hotspot_refs.append(profile_override)
+
+    wifi_type_values = {"wifi", "802-11-wireless", "wireless"}
+
+    for line in out.splitlines():
+        # Use maxsplit to keep NAME intact even if it contains ':' characters.
+        parts = line.split(":", 2)
+        if len(parts) < 3:
+            continue
+        conn_uuid, conn_name, conn_type = parts[0], parts[1], parts[2]
+        if conn_type not in wifi_type_values or not conn_uuid:
+            continue
+
+        wifi_profiles.append({"uuid": conn_uuid, "name": conn_name or ""})
+
+        # Older/newer nmcli versions differ in which fields are allowed in the
+        # list query. Query mode per-connection for broad compatibility.
+        ok_mode, out_mode = _run_nmcli(
+            ["-g", "802-11-wireless.mode", "connection", "show", conn_uuid]
+        )
+        mode = out_mode.strip() if ok_mode else ""
+        if mode == "ap":
+            hotspot_uuids.append(conn_uuid)
+
+    hotspot_refs.extend(hotspot_uuids)
+
+    if not hotspot_uuids:
+        # Fallback: use active WiFi connection name if AP-mode metadata is missing.
+        ok_active, out_active = _run_nmcli(
+            ["-t", "-f", "UUID,TYPE", "connection", "show", "--active"]
+        )
+        if ok_active:
+            for line in out_active.splitlines():
+                parts = line.split(":")
+                if (
+                    len(parts) >= 2
+                    and parts[1] in wifi_type_values
+                    and parts[0]
+                ):
+                    hotspot_refs.append(parts[0])
+                    break
+
+    # Heuristic fallback by profile name for installations where mode is hidden
+    # but hotspot profile names are obvious (e.g. HospitalPi, Hotspot, IRIS).
+    if not hotspot_refs:
+        hotspot_name_patterns = re.compile(r"hotspot|hospital|iris|\bap\b", re.I)
+        for p in wifi_profiles:
+            if hotspot_name_patterns.search(p["name"]):
+                hotspot_refs.append(p["uuid"])
+
+    # Final fallback: if only one WiFi profile exists, treat it as hotspot.
+    if not hotspot_refs and len(wifi_profiles) == 1:
+        hotspot_refs.append(wifi_profiles[0]["uuid"])
+
+    # Deduplicate while preserving order.
+    deduped_refs = []
+    seen = set()
+    for ref in hotspot_refs:
+        if not ref or ref in seen:
+            continue
+        seen.add(ref)
+        deduped_refs.append(ref)
+    hotspot_refs = deduped_refs
+
+    if not hotspot_refs:
+        wifi_names = [p["name"] for p in wifi_profiles if p.get("name")]
+        return (
+            False,
+            "hostapd config not found and no NetworkManager hotspot connection was detected. "
+            "Set HRS_HOTSPOT_NM_PROFILE to your hotspot connection name or UUID "
+            f"(wifi profiles seen: {', '.join(wifi_names) if wifi_names else 'none'}).",
+        )
+
+    errors = []
+    for hotspot_ref in hotspot_refs:
+        ok_modify, out_modify = _run_nmcli(
+            [
+                "connection",
+                "modify",
+                hotspot_ref,
+                "wifi-sec.key-mgmt",
+                "wpa-psk",
+                "wifi-sec.psk",
+                new_password,
+            ]
+        )
+        if not ok_modify:
+            errors.append(f"{hotspot_ref}: {out_modify}")
+            continue
+
+        # Bounce the connection so change takes effect.
+        _run_nmcli(["connection", "down", hotspot_ref])
+        ok_up, out_up = _run_nmcli(["connection", "up", hotspot_ref])
+        if not ok_up:
+            errors.append(
+                f"{hotspot_ref}: password changed but reconnect failed: {out_up}"
+            )
+            continue
+
+        ok_show, out_show = _run_nmcli(
+            ["-g", "connection.id", "connection", "show", hotspot_ref]
+        )
+        profile_name = out_show.strip() if ok_show and out_show.strip() else hotspot_ref
+
+        return (
+            True,
+            f"Hotspot password updated via NetworkManager profile '{profile_name}'. Reconnect using the new password.",
+        )
+
+    return False, (
+        " ; ".join(errors)
+        if errors
+        else "Failed to update NetworkManager hotspot profile."
+    )
+
+
+def update_hotspot_password(new_password: str):
+    """Update Raspberry Pi hotspot password in hostapd config and restart service."""
+    if os.name == "nt":
+        return (
+            False,
+            "Hotspot update is only supported when running on Raspberry Pi/Linux.",
+        )
+
+    conf_path = _detect_hostapd_conf_path()
+    if not conf_path:
+        # Fallback for systems using NetworkManager hotspot profiles.
+        return _update_hotspot_password_nmcli(new_password)
+
+    try:
+        with open(conf_path, "r", encoding="utf-8") as f:
+            original = f.read()
+    except Exception as exc:
+        return False, f"Unable to read hostapd config: {exc}"
+
+    if "wpa_passphrase=" not in original:
+        return (
+            False,
+            f"hostapd config at {conf_path} has no wpa_passphrase entry.",
+        )
+
+    updated = re.sub(
+        r"(?m)^\s*wpa_passphrase\s*=\s*.*$",
+        f"wpa_passphrase={new_password}",
+        original,
+        count=1,
+    )
+
+    if updated == original:
+        return False, "Failed to update wpa_passphrase line in hostapd config."
+
+    try:
+        with open(conf_path, "w", encoding="utf-8") as f:
+            f.write(updated)
+    except Exception as exc:
+        return (
+            False,
+            f"Unable to write hostapd config. The app may need elevated permissions: {exc}",
+        )
+
+    # Restart in background after returning HTTP response. This is important for
+    # phones/tablets connected over the hotspot; synchronous restart can drop
+    # the request before the client receives a success response.
+    threading.Thread(
+        target=_restart_hostapd_after_delay,
+        args=(2.0,),
+        daemon=True,
+    ).start()
+
+    return (
+        True,
+        "Hotspot password saved. Hotspot will restart in a few seconds; reconnect using the new password.",
+    )
 
 
 def pad_slots(slots, cols=20, rows=4):
@@ -319,6 +775,14 @@ def group_slots(slots, cols=20, rows=4):
     return grouped_rows
 
 
+@app.before_request
+def inject_hotspot_status():
+    """Inject hotspot password status into all templates."""
+    from flask import g
+
+    g.hotspot_password_changed = get_hotspot_password_changed()
+
+
 @app.get("/")
 def home():
     """Homepage with welcome message"""
@@ -360,15 +824,128 @@ def rack_view(rack_id=1):
 @app.route("/settings", methods=["GET", "POST"])
 def settings_view():
     saved = False
+    hotspot_saved = False
+    hotspot_saved_message = None
+    hotspot_error = None
+
     if request.method == "POST":
-        tags = parse_tags_text(request.form.get("preset_tags", ""))
-        set_preset_tags(tags)
-        saved = True
+        # Handle preset tags
+        if "preset_tags" in request.form:
+            tags = parse_tags_text(request.form.get("preset_tags", ""))
+            set_preset_tags(tags)
+            saved = True
+
+        # Handle hotspot password change (legacy form-post fallback)
+        if "hotspot_password" in request.form:
+            new_password = request.form.get("hotspot_password", "").strip()
+            confirm_password = request.form.get("confirm_password", "").strip()
+
+            if not new_password:
+                hotspot_error = "Please enter a new hotspot password."
+            elif len(new_password) < 8:
+                hotspot_error = "Hotspot password must be at least 8 characters."
+            elif len(new_password) > 63:
+                hotspot_error = "Hotspot password must be 63 characters or fewer."
+            elif new_password != confirm_password:
+                hotspot_error = "Passwords do not match."
+            else:
+                # Queue async change to avoid dropping client before response.
+                threading.Thread(
+                    target=_apply_hotspot_password_job,
+                    args=(new_password,),
+                    daemon=True,
+                ).start()
+                hotspot_saved = True
+                hotspot_saved_message = "Hotspot password update queued. The hotspot will restart shortly; reconnect with the new password."
 
     tags = get_preset_tags()
     tags_text = ", ".join(tags)
+    hotspot_password_changed = get_hotspot_password_changed()
+    if not hotspot_error:
+        hotspot_error = get_setting_value("hotspot_last_error", "")
+    if not hotspot_saved_message:
+        hotspot_saved_message = get_setting_value("hotspot_last_success", "")
+
     return render_template(
-        "settings.html", preset_tags=tags, tags_text=tags_text, saved=saved
+        "settings.html",
+        preset_tags=tags,
+        tags_text=tags_text,
+        saved=saved,
+        hotspot_saved=hotspot_saved,
+        hotspot_saved_message=hotspot_saved_message,
+        hotspot_error=hotspot_error,
+        hotspot_password_changed=hotspot_password_changed,
+    )
+
+
+@app.post("/api/hotspot-password")
+def api_update_hotspot_password():
+    """Queue hotspot password update and return immediately for mobile reliability."""
+    data = request.get_json(silent=True) or {}
+    new_password = str(data.get("hotspot_password", "")).strip()
+    confirm_password = str(data.get("confirm_password", "")).strip()
+
+    if not new_password:
+        return (
+            jsonify(
+                {"success": False, "error": "Please enter a new hotspot password."}
+            ),
+            400,
+        )
+    if len(new_password) < 8:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "Hotspot password must be at least 8 characters.",
+                }
+            ),
+            400,
+        )
+    if len(new_password) > 63:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "Hotspot password must be 63 characters or fewer.",
+                }
+            ),
+            400,
+        )
+    if new_password != confirm_password:
+        return jsonify({"success": False, "error": "Passwords do not match."}), 400
+
+    threading.Thread(
+        target=_apply_hotspot_password_job,
+        args=(new_password, True),
+        daemon=True,
+    ).start()
+
+    return jsonify(
+        {
+            "success": True,
+            "message": "Hotspot update queued. Reconnect with the new password in a few seconds.",
+        }
+    )
+
+
+@app.post("/api/reset-hotspot-password")
+def reset_hotspot_password():
+    """Reset hotspot password back to the default password and mark as default."""
+    threading.Thread(
+        target=_apply_hotspot_password_job,
+        args=(DEFAULT_HOTSPOT_PASSWORD, False),
+        daemon=True,
+    ).start()
+    set_setting_value(
+        "hotspot_last_success",
+        "Hotspot reset queued to default password. Reconnect using the default password after the hotspot restarts.",
+    )
+    return jsonify(
+        {
+            "success": True,
+            "message": "Hotspot reset queued to default password. Reconnect using the default password after the hotspot restarts.",
+        }
     )
 
 

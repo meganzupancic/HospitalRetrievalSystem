@@ -6,7 +6,7 @@
   <title>Rack</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
-<body>
+<body class="{% if not g.hotspot_password_changed %}hotspot-alert-active{% endif %}">
   <!-- Hamburger menu -->
   <button class="hamburger-menu" id="hamburger-menu" aria-label="Menu">
     <span></span>
@@ -29,7 +29,15 @@
 
   <!-- Blur overlay -->
   <div class="blur-overlay" id="blur-overlay"></div>
-
+  <!-- Hotspot password alert -->
+  {% if not g.hotspot_password_changed %}
+  <div class="hotspot-alert">
+    <div class="hotspot-alert-content">
+      <strong>Action Required:</strong> The hotspot password has not been changed from the default. Please update it in <a href="/settings" class="alert-link">Settings</a> for security.
+    </div>
+    <button class="alert-close-btn" onclick="this.parentElement.style.display='none';" aria-label="Close alert">&times;</button>
+  </div>
+  {% endif %}
   <!-- Top yellow bar -->
   <header class="top-bar">
     <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo" class="top-bar-image">
