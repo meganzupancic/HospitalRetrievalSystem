@@ -1,5 +1,6 @@
 # wake_word.py
 import json
+import os
 import queue
 import time
 
@@ -11,6 +12,17 @@ WAKE_WORD_DISPLAY = "Iris"
 model_path = "vosk_model/vosk-model-small-en-us-0.15"
 model = vosk.Model(model_path)
 q = queue.Queue()
+_DEFAULT_AUDIO_BLOCKSIZE = 3200
+
+
+def _get_audio_blocksize():
+    raw = os.getenv("HRS_AUDIO_BLOCKSIZE", str(_DEFAULT_AUDIO_BLOCKSIZE))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_AUDIO_BLOCKSIZE
+    return value if value > 0 else _DEFAULT_AUDIO_BLOCKSIZE
+
 
 # test to see if sound device is working
 print(sd.query_devices())
@@ -27,11 +39,17 @@ def wake_word_listener(
     shutdown_flag,
     pause_event,
     wake_stream_active,
+    wake_stream_released=None,
     ble_sender=None,
     rack_provider=None,
 ):
     print("Wake word listener started.")
+    audio_blocksize = _get_audio_blocksize()
+    print(f"Wake listener audio blocksize: {audio_blocksize}")
     rec = vosk.KaldiRecognizer(model, 16000)
+
+    if wake_stream_released is not None:
+        wake_stream_released.set()
 
     # Prefer injected callbacks from the running controller instance so we don't
     # accidentally import a second copy of system_controller with separate globals.
@@ -52,18 +70,20 @@ def wake_word_listener(
     while not shutdown_flag.is_set():
         # Wait for voice stream to be available (not in use by transcriber)
         if not wake_stream_active.is_set():
-            time.sleep(0.2)
+            time.sleep(0.05)
             continue
 
         # Open stream only when needed
         try:
             with sd.RawInputStream(
                 samplerate=16000,
-                blocksize=8000,
+                blocksize=audio_blocksize,
                 dtype="int16",
                 channels=1,
                 callback=callback,
             ):
+                if wake_stream_released is not None:
+                    wake_stream_released.clear()
                 print("Wake word stream opened")
 
                 # Listen only while wake_stream_active is set and shutdown not requested
@@ -110,7 +130,11 @@ def wake_word_listener(
                             break  # Exit inner loop, close stream
 
                 print("Wake word stream closed")
+                if wake_stream_released is not None:
+                    wake_stream_released.set()
 
         except Exception as e:
+            if wake_stream_released is not None:
+                wake_stream_released.set()
             print(f"Error in wake word listener: {e}")
             time.sleep(0.5)  # Brief pause before retrying

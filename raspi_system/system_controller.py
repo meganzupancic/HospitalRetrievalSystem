@@ -11,8 +11,10 @@
 # system_controler.py
 # import socket
 import asyncio
+import concurrent.futures
 import json
 import os
+import queue
 import sys
 import urllib.error
 import urllib.request
@@ -32,11 +34,13 @@ from bleak import BleakClient, BleakScanner
 
 try:
     from raspi_system.arduino_config import get_all_rack_numbers, get_arduino_config
+    from raspi_system.keyword_matcher import build_keyword_matcher
     from raspi_system.motion_handler import motion_listener
     from raspi_system.nlp_parser import find_keyword
 except ModuleNotFoundError:
     # Fallback for direct execution from raspi_system directory on Pi.
     from arduino_config import get_all_rack_numbers, get_arduino_config
+    from keyword_matcher import build_keyword_matcher
     from motion_handler import motion_listener
     from nlp_parser import find_keyword
 
@@ -45,15 +49,62 @@ except ModuleNotFoundError:
 # LBS_LED_CHAR_UUID = "00001525-1212-efde-1523-785feabcd123"
 # from app import socketio
 try:
-    from raspi_system.rack_database_adapter import load_database_from_sqlite
+    from raspi_system.rack_database_adapter import (
+        DB_PATH,
+        load_database_from_sqlite,
+        mark_item_as_most_recent,
+    )
     from raspi_system.speech_to_text import listen_and_transcribe
     from raspi_system.vosk_wake_word import wake_word_listener
 except ModuleNotFoundError:
-    from rack_database_adapter import load_database_from_sqlite
+    from rack_database_adapter import (
+        DB_PATH,
+        load_database_from_sqlite,
+        mark_item_as_most_recent,
+    )
     from speech_to_text import listen_and_transcribe
     from vosk_wake_word import wake_word_listener
 
 # from socketio_instance import socketio
+
+
+def _ble_write_with_response():
+    """Use write-with-response by default for reliability."""
+    raw = str(os.environ.get("HRS_BLE_WRITE_WITH_RESPONSE", "1")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+async def _write_gatt_with_fallback(client, char_uuid, payload):
+    """Write to BLE characteristic and retry with opposite response mode on failure."""
+    preferred = _ble_write_with_response()
+    try:
+        await client.write_gatt_char(char_uuid, payload, response=preferred)
+        return
+    except Exception as first_error:
+        try:
+            await client.write_gatt_char(char_uuid, payload, response=not preferred)
+            print(
+                f"⚠️ BLE write fallback succeeded (response={not preferred}) after: {first_error}"
+            )
+            return
+        except Exception:
+            raise first_error
+
+
+def _timestamp_ms(epoch_seconds=None):
+    """Return local wall-clock timestamp with millisecond precision."""
+    t = time.time() if epoch_seconds is None else float(epoch_seconds)
+    base = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t))
+    ms = int((t % 1) * 1000)
+    return f"{base}.{ms:03d}"
+
+
+def _safe_db_mtime():
+    """Best-effort DB mtime lookup for live matcher refresh."""
+    try:
+        return os.path.getmtime(DB_PATH)
+    except Exception:
+        return None
 
 
 def build_arduino_payload(
@@ -251,6 +302,10 @@ pause_event = threading.Event()
 shutdown_flag = threading.Event()
 wake_stream_active = threading.Event()
 wake_stream_active.set()
+wake_stream_released = threading.Event()
+wake_stream_released.set()
+
+recent_mark_queue = queue.Queue(maxsize=64)
 
 # Active BLE connection metadata for immediate (non-queued) sends.
 active_ble_lock = threading.Lock()
@@ -261,6 +316,59 @@ manual_connect_state = {
     "requests": {},
 }
 manual_reconnect_requests = set()
+
+
+def get_trigger_mode():
+    """Return trigger mode: 'always_on' (default) or 'triggered'."""
+    raw = str(os.environ.get("HRS_TRIGGER_MODE", "always_on")).strip().lower()
+    if raw in {"triggered", "wake", "wake_motion", "gated"}:
+        return "triggered"
+    return "always_on"
+
+
+def use_triggered_voice_session():
+    return get_trigger_mode() == "triggered"
+
+
+def queue_recent_match_update(term):
+    """Queue non-blocking DB updates for latest matched term."""
+    normalized = str(term or "").strip()
+    if not normalized:
+        return
+    try:
+        recent_mark_queue.put_nowait(normalized)
+    except queue.Full:
+        # Drop oldest pending update in favor of the newest term.
+        try:
+            recent_mark_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            recent_mark_queue.put_nowait(normalized)
+        except queue.Full:
+            pass
+
+
+def recent_match_update_worker():
+    """Persist recent-match marker off the voice critical path."""
+    while not shutdown_flag.is_set():
+        try:
+            pending = recent_mark_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
+
+        latest = pending
+        # Coalesce bursts; only newest term needs to win.
+        while True:
+            try:
+                latest = recent_mark_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        try:
+            mark_item_as_most_recent(latest)
+        except Exception as e:
+            print(f"Warning: failed to persist recent match '{latest}': {e}")
 
 
 def _set_active_ble_connection(rack_number, client, char_uuid, loop, device_name):
@@ -500,7 +608,7 @@ def start_manual_connect_server():
 async def _write_payload_now(client, char_uuid, payload):
     if not client or not client.is_connected:
         raise RuntimeError("Arduino is not connected")
-    await client.write_gatt_char(char_uuid, payload, response=True)
+    await _write_gatt_with_fallback(client, char_uuid, payload)
 
 
 async def _send_payload_direct(rack_number, payload):
@@ -515,11 +623,62 @@ async def _send_payload_direct(rack_number, payload):
 
     try:
         async with BleakClient(address) as client:
-            await client.write_gatt_char(char_uuid, payload, response=True)
+            await _write_gatt_with_fallback(client, char_uuid, payload)
         return True
     except Exception as e:
         print(f"❌ Direct BLE send failed for Rack {rack_number}: {e}")
         return False
+
+
+def send_ble_commands_parallel(commands, max_workers=4, reference_start=None):
+    """Send BLE commands concurrently; commands are (rack, keyword, slots)."""
+    normalized = []
+    for command in commands or []:
+        if not isinstance(command, (tuple, list)) or len(command) < 3:
+            continue
+        rack_num, keyword, slot_numbers = command[0], command[1], command[2]
+        normalized.append((rack_num, keyword, slot_numbers))
+
+    if not normalized:
+        return []
+
+    workers = max(1, min(int(max_workers), len(normalized)))
+    results = []
+    ref_start = float(reference_start) if reference_start is not None else None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_cmd = {
+            executor.submit(
+                send_ble_command_now,
+                rack_num,
+                keyword,
+                None,
+                slot_numbers,
+            ): (rack_num, keyword, slot_numbers, time.perf_counter())
+            for rack_num, keyword, slot_numbers in normalized
+        }
+        for future in concurrent.futures.as_completed(future_to_cmd):
+            rack_num, keyword, slot_numbers, submit_perf = future_to_cmd[future]
+            try:
+                ok = bool(future.result())
+            except Exception:
+                ok = False
+            done_perf = time.perf_counter()
+            send_latency_ms = (done_perf - submit_perf) * 1000
+            heard_to_done_ms = (
+                ((done_perf - ref_start) * 1000) if ref_start is not None else None
+            )
+            results.append(
+                (
+                    rack_num,
+                    keyword,
+                    slot_numbers,
+                    ok,
+                    send_latency_ms,
+                    heard_to_done_ms,
+                )
+            )
+
+    return results
 
 
 def send_ble_command_now(rack_number, keyword, slot_number=None, slot_numbers=None):
@@ -1034,7 +1193,13 @@ def ble_worker_thread(start_rack_number=1, fixed_rack_number=None, startup_delay
 
 
 def voice_thread():
-    print("Voice thread started. Waiting for trigger...")
+    mode = get_trigger_mode()
+    if mode == "triggered":
+        print(
+            "Voice thread started in TRIGGERED mode. Waiting for wake/motion trigger..."
+        )
+    else:
+        print("Voice thread started in ALWAYS_ON mode. Listening immediately...")
     # try:
     #     db = load_database_from_sqlite()
     #     print("Database loaded in voice thread.")
@@ -1042,187 +1207,314 @@ def voice_thread():
     #     print(f"Error loading database: {e}")
 
     INACTIVITY_TIMEOUT = None  # shared for wake-word and motion-triggered sessions
+    dedupe_window_sec = float(os.environ.get("HRS_COMMAND_DEDUPE_WINDOW_SEC", "1.2"))
+    last_dispatched_phrase = ""
+    last_dispatch_time = 0.0
 
     while not shutdown_flag.is_set():
-        if voice_trigger.wait(timeout=1):
+        triggered_session = use_triggered_voice_session()
+        if triggered_session:
+            if not voice_trigger.wait(timeout=1):
+                continue
             voice_trigger.clear()
             pause_event.set()
 
-            # Give wake word listener time to release the audio device
-            time.sleep(0.5)
+            # Wait for wake stream to close instead of using a fixed sleep.
+            if not wake_stream_released.wait(timeout=0.4):
+                print("⚠️  Wake stream release wait timed out; continuing")
+        else:
+            pause_event.clear()
 
-            # Wake-word BLE notification is sent by wake_word_listener.
-            # Avoid double-send here.
+        # Wake-word BLE notification is sent by wake_word_listener.
+        # Avoid double-send here.
+        try:
+            last_keyword_time = time.time()
+            last_status_print = time.time()
+            db_refresh_interval_sec = float(
+                os.environ.get("HRS_DB_REFRESH_INTERVAL_SEC", "0.5")
+            )
+            db = load_database_from_sqlite()
+            matcher = build_keyword_matcher(db)
+            cached_db_mtime = _safe_db_mtime()
+            next_db_refresh_check = time.time() + db_refresh_interval_sec
+            configured_racks = set(get_all_rack_numbers())
+            print("⏱️  Listening for keywords...")
 
-            try:
-                last_keyword_time = time.time()
-                last_status_print = time.time()
-                db = load_database_from_sqlite()
-                print("⏱️  Listening for keywords...")
+            for phrase_payload in listen_and_transcribe(shutdown_flag):
+                if INACTIVITY_TIMEOUT is not None:
+                    current_time = time.time()
+                    elapsed = current_time - last_keyword_time
 
-                for phrase in listen_and_transcribe(shutdown_flag):
-                    if INACTIVITY_TIMEOUT is not None:
-                        current_time = time.time()
-                        elapsed = current_time - last_keyword_time
+                    # Print periodic status (every 10 seconds)
+                    if current_time - last_status_print >= 10:
+                        remaining = max(0, INACTIVITY_TIMEOUT - elapsed)
+                        print(
+                            f"⏱️  Still listening... ({remaining:.0f}s until no-keyword timeout)"
+                        )
+                        last_status_print = current_time
 
-                        # Print periodic status (every 10 seconds)
-                        if current_time - last_status_print >= 10:
-                            remaining = max(0, INACTIVITY_TIMEOUT - elapsed)
-                            print(
-                                f"⏱️  Still listening... ({remaining:.0f}s until no-keyword timeout)"
-                            )
-                            last_status_print = current_time
-
-                        if elapsed > INACTIVITY_TIMEOUT:
-                            print(
-                                f"\n⏰ Timeout: No keyword matched for {INACTIVITY_TIMEOUT} seconds"
-                            )
-                            print("🔄 Resetting to wake word/motion detection mode...")
-                            break
-
-                    if phrase is None or not isinstance(phrase, str):
-                        continue
-
-                    if shutdown_flag.is_set():
+                    if elapsed > INACTIVITY_TIMEOUT:
+                        print(
+                            f"\n⏰ Timeout: No keyword matched for {INACTIVITY_TIMEOUT} seconds"
+                        )
+                        print("🔄 Resetting to wake word/motion detection mode...")
                         break
 
-                    print(f"Heard: {phrase}")
-                    result = find_keyword(phrase, db)
-                    print(f"Keyword match result: {result}")
+                phrase = phrase_payload
+                stt_first_partial_ts = None
+                stt_final_ts = None
+                stt_endpoint_ms = None
+                stt_early_fire = False
+                if isinstance(phrase_payload, dict):
+                    phrase = phrase_payload.get("text")
+                    stt_first_partial_ts = phrase_payload.get("stt_first_partial_ts")
+                    stt_final_ts = phrase_payload.get("stt_final_ts")
+                    stt_endpoint_ms = phrase_payload.get("stt_endpoint_ms")
+                    stt_early_fire = bool(phrase_payload.get("stt_early_fire", False))
 
-                    if result:
-                        # Keep the session alive only when a keyword is matched.
-                        last_keyword_time = time.time()
-                        last_status_print = last_keyword_time
-                        print("⏱️  Keyword matched, no-keyword timeout reset")
+                if phrase is None or not isinstance(phrase, str):
+                    continue
 
-                        keyword = result.get("item")
-                        matched_term = result.get("matched_term", keyword)
-                        matches = result.get("matches") or []
-                        match_type = result.get("match_type", "exact")
-                        confidence = result.get("confidence", 0.0)
-                        print(
-                            f"🔎 Match details: type={match_type}, confidence={confidence:.3f}, term='{matched_term}'"
-                        )
+                if shutdown_flag.is_set():
+                    break
 
-                        # Prefer the matcher-provided rows so tag terms can fan out to
-                        # every matching item. Fall back to the matched item if needed.
-                        if not matches:
-                            item_id = result.get("id")
-                            if item_id is not None:
-                                matches = [e for e in db if e.get("id") == item_id]
-                            else:
-                                matches = [
-                                    e
-                                    for e in db
-                                    if e.get("item", "").lower() == keyword.lower()
-                                ]
-
-                        racks = {}
-                        if matches:
-                            # Aggregate locations by rack for clearer output and BLE payloads.
-                            for m in matches:
-                                rack = m.get("rack")
-                                ble_slot = entry_to_ble_slot(m)
-                                if rack is None or ble_slot is None:
-                                    continue
-                                racks.setdefault(rack, []).append(ble_slot)
-
-                            display_term = matched_term or keyword
-                            if (
-                                len(
-                                    {
-                                        m.get("id")
-                                        for m in matches
-                                        if m.get("id") is not None
-                                    }
-                                )
-                                > 1
-                            ):
-                                print(f"Found items for tag: '{display_term}'")
-                            else:
-                                print(f"Found item: '{display_term}'")
-                            for rack, locs in sorted(racks.items()):
-                                locs_sorted = sorted(set(locs))
-                                locs_str = ", ".join(str(loc) for loc in locs_sorted)
-                                print(f"  • Rack #{rack} locations: {locs_str}")
-
-                        else:
-                            # Single result from NLP; print the reported rack/location
-                            print(f"Found item: '{matched_term or keyword}'")
-                            print(
-                                f"  • Rack #{result.get('rack')} Location {result.get('location')}"
-                            )
-                        # socketio.emit("highlight_keyword", {"keyword": keyword})
-
-                        # Trigger LED light on Nordic board
-                        # asyncio.run(light_led_for_seconds(5))
-
-                        # Send BLE signal(s) with all matched slots per rack.
+                now_loop = time.time()
+                if now_loop >= next_db_refresh_check:
+                    next_db_refresh_check = now_loop + db_refresh_interval_sec
+                    live_mtime = _safe_db_mtime()
+                    if live_mtime is not None and live_mtime != cached_db_mtime:
                         try:
-                            configured_racks = set(get_all_rack_numbers())
-                            if racks:
-                                for rack_num, slot_list in sorted(racks.items()):
-                                    if rack_num in configured_racks:
-                                        slots_sorted = sorted(set(slot_list))
-                                        if send_ble_command_now(
+                            db = load_database_from_sqlite()
+                            matcher = build_keyword_matcher(db)
+                            cached_db_mtime = live_mtime
+                            print(
+                                "🔄 Database changed, matcher refreshed (live update applied)"
+                            )
+                        except Exception as refresh_error:
+                            print(f"⚠️  Live DB refresh failed: {refresh_error}")
+
+                normalized_phrase = " ".join(str(phrase).lower().split())
+                now_for_dedupe = time.time()
+                if (
+                    normalized_phrase
+                    and normalized_phrase == last_dispatched_phrase
+                    and (now_for_dedupe - last_dispatch_time) <= dedupe_window_sec
+                ):
+                    print(
+                        f"⏭️  Duplicate phrase suppressed: '{phrase}' within {dedupe_window_sec:.1f}s"
+                    )
+                    continue
+
+                heard_wall = stt_final_ts if stt_final_ts is not None else time.time()
+                heard_perf = time.perf_counter()
+                print(f"Heard [{_timestamp_ms(heard_wall)}]: {phrase}")
+                if stt_early_fire:
+                    print("⚡ Early partial dispatch used before final endpoint")
+                if stt_endpoint_ms is not None:
+                    print(
+                        f"⏱️  STT endpoint latency (first partial->final): {stt_endpoint_ms:.1f}ms"
+                    )
+                result = find_keyword(phrase, db, matcher=matcher, mark_recent=False)
+                if not result:
+                    live_mtime = _safe_db_mtime()
+                    if live_mtime is not None and live_mtime != cached_db_mtime:
+                        try:
+                            db = load_database_from_sqlite()
+                            matcher = build_keyword_matcher(db)
+                            cached_db_mtime = live_mtime
+                            print(
+                                "🔄 Database changed since last check, retrying match with refreshed data"
+                            )
+                            result = find_keyword(
+                                phrase,
+                                db,
+                                matcher=matcher,
+                                mark_recent=False,
+                            )
+                        except Exception as retry_refresh_error:
+                            print(
+                                f"⚠️  On-demand DB refresh failed: {retry_refresh_error}"
+                            )
+                print(f"Keyword match result: {result}")
+
+                if result:
+                    # Keep the session alive only when a keyword is matched.
+                    last_keyword_time = time.time()
+                    last_status_print = last_keyword_time
+                    match_latency_ms = (time.perf_counter() - heard_perf) * 1000
+                    print("⏱️  Keyword matched, no-keyword timeout reset")
+                    print(f"⏱️  Latency: heard->keyword_match {match_latency_ms:.1f}ms")
+
+                    keyword = result.get("item")
+                    matched_term = result.get("matched_term", keyword)
+                    queue_recent_match_update(matched_term)
+                    matches = result.get("matches") or []
+                    match_type = result.get("match_type", "exact")
+                    confidence = result.get("confidence", 0.0)
+                    print(
+                        f"🔎 Match details: type={match_type}, confidence={confidence:.3f}, term='{matched_term}'"
+                    )
+
+                    # Prefer the matcher-provided rows so tag terms can fan out to
+                    # every matching item. Fall back to the matched item if needed.
+                    if not matches:
+                        item_id = result.get("id")
+                        if item_id is not None:
+                            matches = [e for e in db if e.get("id") == item_id]
+                        else:
+                            matches = [
+                                e
+                                for e in db
+                                if e.get("item", "").lower() == keyword.lower()
+                            ]
+
+                    racks = {}
+                    if matches:
+                        # Aggregate locations by rack for clearer output and BLE payloads.
+                        for m in matches:
+                            rack = m.get("rack")
+                            ble_slot = entry_to_ble_slot(m)
+                            if rack is None or ble_slot is None:
+                                continue
+                            racks.setdefault(rack, []).append(ble_slot)
+
+                        display_term = matched_term or keyword
+                        if (
+                            len(
+                                {
+                                    m.get("id")
+                                    for m in matches
+                                    if m.get("id") is not None
+                                }
+                            )
+                            > 1
+                        ):
+                            print(f"Found items for tag: '{display_term}'")
+                        else:
+                            print(f"Found item: '{display_term}'")
+                        for rack, locs in sorted(racks.items()):
+                            locs_sorted = sorted(set(locs))
+                            locs_str = ", ".join(str(loc) for loc in locs_sorted)
+                            print(f"  • Rack #{rack} locations: {locs_str}")
+
+                    else:
+                        # Single result from NLP; print the reported rack/location
+                        print(f"Found item: '{matched_term or keyword}'")
+                        print(
+                            f"  • Rack #{result.get('rack')} Location {result.get('location')}"
+                        )
+                    # socketio.emit("highlight_keyword", {"keyword": keyword})
+
+                    # Trigger LED light on Nordic board
+                    # asyncio.run(light_led_for_seconds(5))
+
+                    # Send BLE signal(s) with all matched slots per rack.
+                    try:
+                        command_sent_ok = False
+                        if racks:
+                            commands = []
+                            for rack_num, slot_list in sorted(racks.items()):
+                                if rack_num in configured_racks:
+                                    commands.append(
+                                        (
                                             rack_num,
                                             keyword,
-                                            slot_numbers=slots_sorted,
-                                        ):
-                                            print(
-                                                f"✅ Command sent for Rack {rack_num}, Slots {slots_sorted}"
-                                            )
-                                        else:
-                                            print(
-                                                f"❌ Command failed for Rack {rack_num}, Slots {slots_sorted} (not queued)"
-                                            )
-                                        print(
-                                            f"Attempted BLE send for Rack {rack_num}, Slots {slots_sorted}"
+                                            sorted(set(slot_list)),
                                         )
-                                    else:
-                                        print(
-                                            f"❌ Invalid or unconfigured rack number: {rack_num}"
-                                        )
-                            else:
-                                rack_num = result.get("rack")
-                                slot_num = entry_to_ble_slot(result)
-                                if rack_num and rack_num in configured_racks:
-                                    if send_ble_command_now(
-                                        rack_num, keyword, slot_num
-                                    ):
-                                        print(
-                                            f"✅ Command sent immediately for Rack {rack_num}, Slot {slot_num}"
-                                        )
-                                    else:
-                                        print(
-                                            f"❌ Command failed for Rack {rack_num}, Slot {slot_num} (not queued)"
-                                        )
-                                    print(
-                                        f"Attempted BLE send for Rack {rack_num}, Slot {slot_num}"
                                     )
                                 else:
                                     print(
                                         f"❌ Invalid or unconfigured rack number: {rack_num}"
                                     )
-                        except Exception as e:
-                            print(f"Error sending BLE event: {e}")
 
-            except GeneratorExit:
-                print("🛑 Voice listening stopped (generator exit)")
-            except Exception as e:
-                print(f"❌ Error in voice thread: {e}")
-                import traceback
+                            for (
+                                rack_num,
+                                _,
+                                slots_sorted,
+                                ok,
+                                send_latency_ms,
+                                heard_to_done_ms,
+                            ) in send_ble_commands_parallel(
+                                commands,
+                                reference_start=heard_perf,
+                            ):
+                                if ok:
+                                    command_sent_ok = True
+                                    print(
+                                        f"✅ Command sent for Rack {rack_num}, Slots {slots_sorted}"
+                                    )
+                                else:
+                                    print(
+                                        f"❌ Command failed for Rack {rack_num}, Slots {slots_sorted} (not queued)"
+                                    )
+                                print(
+                                    f"Attempted BLE send for Rack {rack_num}, Slots {slots_sorted}"
+                                )
+                                # Per-rack latency line for dashboard/log parsing.
+                                total_ms_text = (
+                                    f"{heard_to_done_ms:.1f}"
+                                    if heard_to_done_ms is not None
+                                    else "n/a"
+                                )
+                                print(
+                                    f"⏱️  Latency: heard->ble_sent rack={rack_num} slots={slots_sorted}"
+                                    f" total_ms={total_ms_text} send_ms={send_latency_ms:.1f}"
+                                )
+                        else:
+                            rack_num = result.get("rack")
+                            slot_num = entry_to_ble_slot(result)
+                            if rack_num and rack_num in configured_racks:
+                                single_send_start = time.perf_counter()
+                                ok = send_ble_command_now(rack_num, keyword, slot_num)
+                                send_latency_ms = (
+                                    time.perf_counter() - single_send_start
+                                ) * 1000
+                                heard_to_done_ms = (
+                                    time.perf_counter() - heard_perf
+                                ) * 1000
+                                if ok:
+                                    command_sent_ok = True
+                                    print(
+                                        f"✅ Command sent immediately for Rack {rack_num}, Slot {slot_num}"
+                                    )
+                                else:
+                                    print(
+                                        f"❌ Command failed for Rack {rack_num}, Slot {slot_num} (not queued)"
+                                    )
+                                print(
+                                    f"Attempted BLE send for Rack {rack_num}, Slot {slot_num}"
+                                )
+                                print(
+                                    f"⏱️  Latency: heard->ble_sent rack={rack_num} slot={slot_num}"
+                                    f" total_ms={heard_to_done_ms:.1f} send_ms={send_latency_ms:.1f}"
+                                )
+                            else:
+                                print(
+                                    f"❌ Invalid or unconfigured rack number: {rack_num}"
+                                )
 
-                traceback.print_exc()
-            finally:
-                # Always reset to wake word mode after listening session ends
+                        if command_sent_ok and normalized_phrase:
+                            last_dispatched_phrase = normalized_phrase
+                            last_dispatch_time = time.time()
+                    except Exception as e:
+                        print(f"Error sending BLE event: {e}")
+
+        except GeneratorExit:
+            print("🛑 Voice listening stopped (generator exit)")
+        except Exception as e:
+            print(f"❌ Error in voice thread: {e}")
+            import traceback
+
+            traceback.print_exc()
+        finally:
+            if triggered_session:
+                # Reset to wake word mode after each triggered listening session.
                 pause_event.clear()
                 wake_stream_active.set()
                 print(
                     "✅ System reset complete - now listening for wake word or motion"
                 )
-                time.sleep(0.5)
+                time.sleep(0.2)
 
 
 def run_system():
@@ -1230,39 +1522,50 @@ def run_system():
     # BLE Worker threads now handle all BLE communication (one per rack)
 
     start_manual_connect_server()
+    triggered_mode = use_triggered_voice_session()
 
     t1 = threading.Thread(target=voice_thread, args=(), daemon=True)
-    t2 = threading.Thread(
-        target=motion_listener,
-        args=(
-            voice_trigger,
-            shutdown_flag,
-            pause_event,
-            wake_stream_active,
-            send_ble_command_now,
-            get_all_rack_numbers,
-        ),
-        daemon=True,
-    )
-    t3 = threading.Thread(
-        target=wake_word_listener,
-        args=(
-            voice_trigger,
-            shutdown_flag,
-            pause_event,
-            wake_stream_active,
-            send_ble_command_now,
-            get_all_rack_numbers,
-        ),
-        daemon=True,
-    )
+    t4 = threading.Thread(target=recent_match_update_worker, args=(), daemon=True)
 
     t1.start()
-    t2.start()
-    t3.start()
+    t4.start()
+
+    # Motion/wake trigger threads are optional behind HRS_TRIGGER_MODE.
+    threads = [t1, t4]
+    if triggered_mode:
+        t2 = threading.Thread(
+            target=motion_listener,
+            args=(
+                voice_trigger,
+                shutdown_flag,
+                pause_event,
+                wake_stream_active,
+                send_ble_command_now,
+                get_all_rack_numbers,
+            ),
+            daemon=True,
+        )
+        t3 = threading.Thread(
+            target=wake_word_listener,
+            args=(
+                voice_trigger,
+                shutdown_flag,
+                pause_event,
+                wake_stream_active,
+                wake_stream_released,
+                send_ble_command_now,
+                get_all_rack_numbers,
+            ),
+            daemon=True,
+        )
+        t2.start()
+        t3.start()
+        threads.extend([t2, t3])
+        print("Voice trigger mode enabled: wake word and motion listener started")
+    else:
+        print("Always-on mode enabled: wake word and motion listener are disabled")
 
     # Start one persistent BLE worker thread per rack.
-    threads = [t1, t2, t3]
     for rack_num in get_all_rack_numbers():
         # Stagger initial connects so the adapter doesn't get hammered by four
         # simultaneous discovery/connect attempts.
@@ -1274,7 +1577,14 @@ def run_system():
         t_ble.start()
         threads.append(t_ble)
 
-    print("All threads started: voice, motion, wake word, and per-rack BLE workers")
+    if triggered_mode:
+        print(
+            "All threads started: voice, motion, wake word, recent-match worker, and per-rack BLE workers"
+        )
+    else:
+        print(
+            "All threads started: always-on voice, recent-match worker, and per-rack BLE workers"
+        )
 
     # ui.run()
 

@@ -106,7 +106,7 @@ def _prefer_size_specific_matches(text, result):
     return narrowed_result
 
 
-def find_keyword(text, database, matcher=None):
+def find_keyword(text, database, matcher=None, mark_recent=True):
     """Return a matched item dict and mark it as the most recent called item in the DB.
 
     The `database` argument is expected to be a list of dicts with at least the keys
@@ -129,13 +129,15 @@ def find_keyword(text, database, matcher=None):
 
     # Mark the matched term as the most recent called in the persistent DB.
     # This lets tag matches update every item carrying that tag.
-    try:
-        database_manager.mark_item_as_most_recent(
-            result.get("matched_term", result["item"])
-        )
-    except Exception:
-        # Don't let DB errors break NLP flow
-        pass
+    # Keep this optional so latency-sensitive call paths can defer writes.
+    if mark_recent:
+        try:
+            database_manager.mark_item_as_most_recent(
+                result.get("matched_term", result["item"])
+            )
+        except Exception:
+            # Don't let DB errors break NLP flow
+            pass
 
     # Ensure isCalled is present for downstream logic.
     if "isCalled" not in result:

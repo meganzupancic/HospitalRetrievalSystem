@@ -6,12 +6,57 @@
 import json
 import os
 import queue
+import time
 
 import sounddevice as sd
 import vosk
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _VOSK_MODEL_DIR = os.path.join(_BASE_DIR, "vosk_model")
+_DEFAULT_AUDIO_BLOCKSIZE = 1600
+_DEFAULT_EARLY_PARTIAL_MIN_CHARS = 4
+_DEFAULT_EARLY_PARTIAL_STABLE_HITS = 2
+
+
+def _log_partials_enabled():
+    raw = str(os.getenv("HRS_LOG_PARTIALS", "0")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _early_partial_enabled():
+    raw = str(os.getenv("HRS_EARLY_PARTIAL_FIRE", "1")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _get_early_partial_min_chars():
+    raw = os.getenv(
+        "HRS_EARLY_PARTIAL_MIN_CHARS", str(_DEFAULT_EARLY_PARTIAL_MIN_CHARS)
+    )
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_EARLY_PARTIAL_MIN_CHARS
+    return max(1, value)
+
+
+def _get_early_partial_stable_hits():
+    raw = os.getenv(
+        "HRS_EARLY_PARTIAL_STABLE_HITS", str(_DEFAULT_EARLY_PARTIAL_STABLE_HITS)
+    )
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_EARLY_PARTIAL_STABLE_HITS
+    return max(1, value)
+
+
+def _get_audio_blocksize():
+    raw = os.getenv("HRS_AUDIO_BLOCKSIZE", str(_DEFAULT_AUDIO_BLOCKSIZE))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_AUDIO_BLOCKSIZE
+    return value if value > 0 else _DEFAULT_AUDIO_BLOCKSIZE
 
 
 def _model_path(folder_name):
@@ -150,9 +195,21 @@ def callback(indata, frames, time, status):
 
 def listen_and_transcribe(shutdown_flag):
     info = get_stt_model_info()
+    audio_blocksize = _get_audio_blocksize()
+    log_partials = _log_partials_enabled()
+    early_partial = _early_partial_enabled()
+    early_partial_min_chars = _get_early_partial_min_chars()
+    early_partial_stable_hits = _get_early_partial_stable_hits()
     print(f"STT active model: {info['name']} ({info['path']})")
+    print(f"STT audio blocksize: {audio_blocksize}")
+    print(
+        f"STT early partial fire: {early_partial} (min_chars={early_partial_min_chars}, stable_hits={early_partial_stable_hits})"
+    )
     print("Listening...")
     rec = vosk.KaldiRecognizer(model, 16000)
+    first_partial_time = None
+    last_partial = ""
+    partial_stable_count = 0
 
     def _dedupe_tail(s: str) -> str:
         # If the string ends with a small substring repeated twice (e.g. 'aidaid'), trim one repetition.
@@ -167,7 +224,7 @@ def listen_and_transcribe(shutdown_flag):
     try:
         with sd.RawInputStream(
             samplerate=16000,
-            blocksize=8000,
+            blocksize=audio_blocksize,
             dtype="int16",
             channels=1,
             callback=callback,
@@ -183,17 +240,71 @@ def listen_and_transcribe(shutdown_flag):
                 # data = stream.read(8000)[0]
                 # data = bytes(data)
                 if rec.AcceptWaveform(data):
+                    final_time = time.time()
                     result = json.loads(rec.Result())
                     text = result.get("text", "")
                     if text:
                         text = _dedupe_tail(text)
                         if text:
-                            print(f"Heard: {text}")
-                            yield text
+                            stt_endpoint_ms = None
+                            first_partial_ts = first_partial_time
+                            if first_partial_time is not None:
+                                stt_endpoint_ms = (
+                                    final_time - first_partial_time
+                                ) * 1000
+                            first_partial_time = None
+                            yield {
+                                "text": text,
+                                "stt_first_partial_ts": first_partial_ts,
+                                "stt_final_ts": final_time,
+                                "stt_endpoint_ms": stt_endpoint_ms,
+                                "stt_early_fire": False,
+                            }
+                    last_partial = ""
+                    partial_stable_count = 0
                 else:
                     partial = json.loads(rec.PartialResult()).get("partial", "")
                     # Print partials in real-time for live feedback
                     if partial:
+                        if first_partial_time is None:
+                            first_partial_time = time.time()
+
+                        normalized_partial = str(partial).strip()
+                        if normalized_partial == last_partial:
+                            partial_stable_count += 1
+                        else:
+                            last_partial = normalized_partial
+                            partial_stable_count = 1
+
+                        if (
+                            early_partial
+                            and normalized_partial
+                            and len(normalized_partial) >= early_partial_min_chars
+                            and partial_stable_count >= early_partial_stable_hits
+                        ):
+                            early_time = time.time()
+                            stt_endpoint_ms = None
+                            if first_partial_time is not None:
+                                stt_endpoint_ms = (
+                                    early_time - first_partial_time
+                                ) * 1000
+                            yield {
+                                "text": normalized_partial,
+                                "stt_first_partial_ts": first_partial_time,
+                                "stt_final_ts": early_time,
+                                "stt_endpoint_ms": stt_endpoint_ms,
+                                "stt_early_fire": True,
+                            }
+                            # Avoid repeatedly yielding the same stable partial.
+                            last_partial = ""
+                            partial_stable_count = 0
+                            first_partial_time = None
+                    else:
+                        last_partial = ""
+                        partial_stable_count = 0
+                        first_partial_time = None
+
+                    if log_partials and partial:
                         print(f"Partial: {partial}", end="\r")
     except Exception as e:
         print(f"Error in audio stream: {e}")
